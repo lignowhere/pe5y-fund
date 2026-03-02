@@ -1,0 +1,32 @@
+name = "seo-automation-worker"
+main = "src/index.ts"
+compatibility_date = "2025-09-15"
+compatibility_flags = ["nodejs_compat"]
+
+# Cloudflare Browser Rendering
+# NOTE: Browser binding only works with `wrangler dev --remote` or in production
+# For local testing, browser methods will be skipped
+# browser = { binding = "MYBROWSER" }
+
+# Daily cron trigger at 00:00 UTC
+[triggers]
+crons = ["0 0 * * *"]
+
+# D1 Database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "seo-automation-db"
+database_id = "placeholder"  # Replace after: wrangler d1 create seo-automation-db
+
+# Durable Objects for per-site crawler coordination
+[[durable_objects.bindings]]
+name = "SITE_CRAWLER"
+class_name = "SiteCrawler"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["SiteCrawler"]
+
+# Environment variables (use wrangler secret for production)
+[vars]
+ENVIRONMENT = "development"
