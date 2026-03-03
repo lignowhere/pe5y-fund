@@ -1,12 +1,12 @@
 # Project Overview & Product Development Requirements
 
-> Last updated: 2026-03-02
+> Last updated: 2026-03-03
 
 ## Project Identity
 
 - **Name**: PE5Y Fund System
 - **Type**: Quantitative investment tool for Vietnam stock market
-- **Stage**: Active development (backend functional, frontend MVP)
+- **Stage**: Active development (backend functional, frontend MVP complete)
 
 ## Problem Statement
 
@@ -16,6 +16,7 @@ Individual investors in Vietnam lack systematic tools to implement factor-based 
 - Computing complex signals with market cap, liquidity, and EPS filters
 - Sizing portfolios with ADV (Average Daily Volume) constraints
 - Backtesting with realistic cash flow scenarios
+- Calculating rebalance trades when depositing or withdrawing capital mid-cycle
 
 ## Core Strategy
 
@@ -32,14 +33,18 @@ Individual investors in Vietnam lack systematic tools to implement factor-based 
 ### 1. PE5Y Backend (Python/FastAPI) — Primary
 - Strategy optimizer, signal generation, backtesting
 - Data pipeline from VCI (Vietcap) and KBS (KB Securities) APIs
-- SQLite database (`vietnam_stocks.db`) with price history and financial ratios
+- SQLite database (`./vietnam_stocks.db`, local, gitignored) with price history and financial ratios
 - Background scheduler for auto-updating missing data
+- Live strategy config editor with JSON overrides (`strategy_config.json`)
+- VNINDEX benchmark CAGR comparison
 
-### 2. PE5Y Frontend (Next.js/React) — MVP
-- Dashboard: strategy optimization by capital input
-- Portfolio viewer: position details with fill rates
+### 2. PE5Y Frontend (Next.js/React) — MVP Complete
+- Dashboard: strategy optimization by capital input, VNINDEX benchmark display
+- Portfolio viewer: position details with fill rates, sortable table, CSV export
+- Rebalance Calculator: deposit/withdraw cash flow → buy/sell order list
+- Config page: live strategy parameter editor (filters, sizing, costs, benchmark)
 - Data verification: VCI vs KBS cross-check
-- Data management: status, missing data detection, streaming updates
+- Data management: status, missing data detection, SSE streaming updates
 
 ### 3. Inventory Management Backend (Express/Prisma) — Separate
 - Multi-channel inventory management system
@@ -61,29 +66,35 @@ Individual investors in Vietnam lack systematic tools to implement factor-based 
 - [x] Data verification (VCI vs KBS cross-check)
 - [x] Background data auto-update scheduler
 - [x] Frontend dashboard with optimization flow
+- [x] VNINDEX benchmark comparison
+- [x] Live strategy config editor
+- [x] Rebalance Calculator (deposit/withdraw → buy/sell orders)
 - [ ] Real-time portfolio tracking
 
 ### P1 — Should Have
 - [x] Cash flow backtest (simulation + real data)
-- [x] SSE streaming for price updates
+- [x] SSE streaming for price + financials updates
 - [x] Sensitivity heatmap data endpoint
-- [ ] Historical yearly performance breakdown
+- [x] Shared frontend formatter utilities (`fmtVND`, `fmtPrice`, `fillColor`)
+- [ ] Historical yearly performance breakdown (stub only)
 - [ ] User authentication (JWT ready in Prisma schema)
 
 ### P2 — Nice to Have
 - [ ] Multi-strategy comparison
 - [ ] Alert/notification system
 - [ ] Mobile-responsive optimization
-- [ ] Export to CSV/PDF
+- [ ] Export to CSV/PDF (partial: CSV copy on portfolio page)
 
 ## Technical Constraints
 
 - **Data sources**: VCI GraphQL API (rate-limited 30 RPM), KBS REST API (rate-limited 30 RPM)
-- **Database**: SQLite for PE5Y (single-file, portable), PostgreSQL for inventory
+- **Database**: SQLite for PE5Y (single-file, portable, gitignored), PostgreSQL for inventory
+- **DB path**: Configured via `PE5Y_DB_PATH` env var; defaults to `./vietnam_stocks.db` (local)
 - **Price scale**: DB stores close prices in thousands of VND (`close * 1000 = VND`)
 - **Market cap**: Column `market_cap_billions` is actually in VND (misleading name)
 - **Formation years**: 2014-2024 (hold years 2015-2025)
 - **EPS relaxation**: 3-year minimum for hold years 2015-2017, 5-year for 2018+
+- **Config overrides**: `strategy_config.json` adjacent to DB file; gitignored
 
 ## Success Metrics
 

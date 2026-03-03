@@ -1,6 +1,6 @@
 # System Architecture
 
-> Last updated: 2026-03-02
+> Last updated: 2026-03-03
 
 ## High-Level Overview
 
@@ -16,7 +16,9 @@
 │  ┌──────────┐   ┌──────────┐   ┌──────────────────────┐ │
 │  │ SQLite   │   │PostgreSQL│   │ Cloudflare D1        │ │
 │  │ (PE5Y)   │   │(Inventory)│  │ (SEO Automation)     │ │
-│  └──────────┘   └──────────┘   └──────────────────────┘ │
+│  │ local    │   └──────────┘   └──────────────────────┘ │
+│  │ gitignore│                                            │
+│  └──────────┘                                            │
 ├─────────────────────────────────────────────────────────┤
 │              External Data Sources                        │
 │  ┌──────────┐   ┌──────────┐                            │
@@ -67,6 +69,9 @@ optimizer.py: optimize()
     │   └─ Score: highest CAGR where fill_rate >= 85%
     └─ Return all configs + recommendation
     │
+    ├─ benchmark.py: calc_benchmark_cagr()
+    │   └─ VNINDEX buy-and-hold CAGR over same period
+    │
     ▼
 position_sizer.py: size_portfolio()
     │
@@ -74,6 +79,29 @@ position_sizer.py: size_portfolio()
     ├─ Lot-sized: floor(target_value / price / 100) * 100
     ├─ ADV-constrained: shares_per_day = ADV * 10% participation
     └─ Fill rate: min(1.0, spd * accum_days / target_shares)
+```
+
+### Rebalance Calculator Flow
+
+```
+Portfolio Page: user inputs cashFlow (B VND)
+    │
+    ▼
+newCapital = currentData.capital_vnd + cashFlow * 1e9
+    │
+    ▼
+api.portfolio(newCapital, pct, year)   ← GET /api/strategy/portfolio
+    │
+    ▼
+computeTrades(currentData.positions, newData.positions)
+    │
+    ├─ For each symbol in union of old + new:
+    │   delta = newShares - oldShares
+    │   if delta != 0 → RebalanceTrade { trade_shares: delta }
+    │
+    ▼
+Display: buy orders (delta > 0), sell orders (delta < 0)
+         total buy value, total sell value, new cash drag
 ```
 
 ### Data Pipeline
@@ -85,10 +113,29 @@ Scheduler (6h interval)  ──or──  Manual API trigger
 detect_missing_prices()        POST /api/data/update/prices
     │                                │
     ▼                                ▼
-VCIClient.get_ohlcv()         update_prices_stream() [SSE]
-    │
+VCIClient.get_ohlcv()         GET /api/data/update/prices/stream [SSE]
+    │                          GET /api/data/update/financials/stream [SSE]
     ▼
 INSERT OR IGNORE into stock_price_history
+```
+
+### Configuration Override Flow
+
+```
+config.py: get_config()
+    │
+    ├─ Load defaults from AppConfig/StrategyConfig dataclasses
+    ├─ Read PE5Y_DB_PATH from env (default: ./vietnam_stocks.db)
+    └─ Load strategy_config.json (if exists, adjacent to DB)
+        └─ Merge overrides into StrategyConfig
+
+PUT /api/strategy/config → save_strategy_config(data)
+    │
+    └─ Write to strategy_config.json → reload_config()
+
+POST /api/strategy/config/reset
+    │
+    └─ Delete strategy_config.json → reload_config()
 ```
 
 ### Data Verification Flow
@@ -116,17 +163,26 @@ VCIFinancialRow                          KBSFinancialRow
 Next.js App Router
     │
     ├─ / (Dashboard)
-    │   └─ Input capital → POST optimize → Display 4 config cards
+    │   └─ Input capital → POST optimize → Display 4 config cards + VNINDEX benchmark
     │
     ├─ /portfolio
-    │   └─ capital + pct params → GET portfolio → Position table
+    │   ├─ capital + pct params → GET portfolio → Position table (sortable, CSV copy)
+    │   ├─ RebalanceCalculator (collapsible)
+    │   │   └─ Input cashFlow → GET portfolio(newCapital) → computeTrades() → buy/sell list
+    │   └─ ADV Detail (expandable)
+    │
+    ├─ /config
+    │   ├─ GET /api/strategy/config → display all StrategyConfig fields
+    │   ├─ Edit fields → PUT /api/strategy/config → save
+    │   └─ Reset → POST /api/strategy/config/reset
     │
     ├─ /verify
     │   └─ Input symbol → GET verify/{symbol} → Comparison table
     │
     └─ /data
         ├─ GET /api/data/health → DB coverage report
-        └─ GET /api/data/update/prices/stream → SSE progress
+        ├─ GET /api/data/update/prices/stream → SSE progress
+        └─ GET /api/data/update/financials/stream → SSE progress
 ```
 
 ### API Client Pattern
@@ -134,11 +190,27 @@ Next.js App Router
 ```typescript
 // Centralized in frontend/src/lib/api.ts
 export const api = {
-  optimize: (capital) => fetchJson("/api/strategy/optimize", { capital }),
-  portfolio: (capital, pct) => fetchJson("/api/strategy/portfolio", { capital, pct }),
-  verify: (symbol) => fetchJson(`/api/verify/${symbol}`),
-  streamPriceUpdate: (onEvent, onDone) => { /* SSE reader */ },
+  optimize: (capital, year?) => fetchJson("/api/strategy/optimize", { capital }),
+  portfolio: (capital, pct, year?) => fetchJson("/api/strategy/portfolio", { capital, pct }),
+  verify: (symbol, year?) => fetchJson(`/api/verify/${symbol}`),
+  streamPriceUpdate: (onEvent, onDone) => _streamSSE(url, onEvent, onDone),
+  streamFinancialsUpdate: (onEvent, onDone, year?) => _streamSSE(url, onEvent, onDone),
+  strategyConfig: () => fetchJson("/api/strategy/config"),
+  saveStrategyConfig: (data) => putJson("/api/strategy/config", data),
+  resetStrategyConfig: () => postJson("/api/strategy/config/reset"),
 };
+
+// Shared SSE helper — returns AbortController for cancellation
+function _streamSSE(url, onEvent, onDone): AbortController
+```
+
+### Shared Formatter Pattern
+
+```typescript
+// frontend/src/lib/format.ts — imported by portfolio/page.tsx, rebalance-calculator.tsx
+export function fmtVND(v: number): string    // e.g. 1.2T, 3.5B, 200M
+export function fmtPrice(v: number): string  // e.g. 25.3k (stored_vnd / 1000)
+export function fillColor(rate: number): string  // Tailwind text-* class by threshold
 ```
 
 ## Inventory Backend Architecture
@@ -187,15 +259,18 @@ SiteCrawler DO
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| PE5Y DB | SQLite | Single-file portability, no server needed, fast for read-heavy queries |
+| PE5Y DB | SQLite, local, gitignored | Single-file portability; 1.6GB excluded from git; path via env var |
 | PE5Y backend | FastAPI | Async support, auto-docs, Python ecosystem for finance |
 | No ORM for PE5Y | Raw SQL | Performance-critical aggregate queries, complex GROUP BY/HAVING |
 | Inventory DB | PostgreSQL + Prisma | Relational integrity, migrations, type-safe ORM |
 | Frontend | Next.js 16 | React 19, App Router, Tailwind CSS integration |
-| Config | Frozen dataclasses | Immutable, type-safe, env-var defaults |
+| Config | Frozen dataclasses + JSON overrides | Immutable defaults + runtime mutability without restart |
 | Rate limiting | Per-client throttle | Respect broker API limits (30 RPM each) |
 | Data updates | SSE streaming | Real-time progress for long-running batch operations |
 | Market cap filter | Dynamic by year | Accounts for VN market growth (10% per 2 years from 2015) |
+| Rebalance Calculator | Client-side diff of two `/portfolio` calls | No new backend endpoint; reuses existing position sizer |
+| Shared formatters | `lib/format.ts` | DRY — avoids duplicating VND/price/color logic across components |
+| Benchmark | VNINDEX buy-and-hold CAGR | Strategy vs passive index comparison in optimize response |
 
 ## Ports & Services
 

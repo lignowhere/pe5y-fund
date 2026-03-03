@@ -31,7 +31,7 @@ Select stocks with the lowest P/E ratio based on 5-year average EPS. The strateg
 | Project | Stack | Purpose |
 |---------|-------|---------|
 | **PE5Y Backend** | Python, FastAPI, SQLite | Strategy engine, data pipeline, backtesting |
-| **Frontend** | Next.js 16, React 19, Tailwind | Dashboard, portfolio viewer, data management |
+| **Frontend** | Next.js 16, React 19, Tailwind | Dashboard, portfolio viewer, config, data management |
 | **Inventory Backend** | Express 5, Prisma, PostgreSQL | Multi-channel inventory management |
 | **SEO Automation** | Cloudflare Workers, Hono, D1 | Automated SEO scanning + AI rewrite |
 
@@ -43,11 +43,10 @@ Select stocks with the lowest P/E ratio based on 5-year average EPS. The strateg
 # Install dependencies
 pip install -r requirements.txt
 
-# Set database path
+# Set database path (local SQLite — gitignored)
 echo "PE5Y_DB_PATH=./vietnam_stocks.db" > .env
 
 # Run server
-cd backend
 uvicorn backend.main:app --host 127.0.0.1 --port 8002 --reload
 ```
 
@@ -75,9 +74,12 @@ npm run dev   # http://localhost:3001
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/strategy/optimize?capital=10000000000` | Compare 10/12/14/16% configs, recommend best |
+| GET | `/api/strategy/optimize?capital=10000000000` | Compare 10/12/14/16% configs, recommend best + VNINDEX benchmark |
 | GET | `/api/strategy/portfolio?capital=10B&pct=14` | Full portfolio with position sizing |
 | GET | `/api/strategy/history/sensitivity` | 72-run sensitivity heatmap data |
+| GET | `/api/strategy/config` | Get current strategy config |
+| PUT | `/api/strategy/config` | Save strategy config overrides |
+| POST | `/api/strategy/config/reset` | Reset config to defaults |
 
 ### Data Management
 
@@ -88,6 +90,7 @@ npm run dev   # http://localhost:3001
 | GET | `/api/data/missing/prices` | Symbols with stale price data |
 | POST | `/api/data/update/prices` | Trigger price update |
 | GET | `/api/data/update/prices/stream` | SSE streaming price update |
+| GET | `/api/data/update/financials/stream` | SSE streaming financials update |
 | GET | `/api/data/search?q=VNM` | Search symbols by ticker/name |
 
 ### Verification
@@ -113,7 +116,9 @@ npm run dev   # http://localhost:3001
 
 ## Database
 
-### SQLite (PE5Y)
+### SQLite (PE5Y) — `./vietnam_stocks.db`
+- Stored locally, gitignored (not committed to repository)
+- Configure path via `PE5Y_DB_PATH` env var (defaults to `./vietnam_stocks.db`)
 - `stocks` — ticker, company name
 - `stock_exchange` — ticker to exchange mapping (HSX/HNX/UPCOM)
 - `stock_price_history` — daily OHLCV (close stored in thousands of VND)
@@ -124,8 +129,9 @@ npm run dev   # http://localhost:3001
 
 ## Frontend Pages
 
-- **Dashboard** (`/`) — Input capital, compare strategy configs, get recommendation
-- **Portfolio** (`/portfolio`) — Detailed position table with fill rates and ADV data
+- **Dashboard** (`/`) — Input capital, compare strategy configs, get recommendation with VNINDEX benchmark
+- **Portfolio** (`/portfolio`) — Position table with fill rates, ADV data, and Rebalance Calculator (deposit/withdraw)
+- **Config** (`/config`) — Live strategy parameter editor (filters, sizing, costs)
 - **Verify** (`/verify`) — VCI vs KBS data cross-check for any symbol
 - **Data** (`/data`) — DB health report, missing data detection, streaming updates
 
