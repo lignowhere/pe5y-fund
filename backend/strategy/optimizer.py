@@ -105,7 +105,7 @@ def _load_sensitivity_data(project_dir: Path) -> dict[str, float]:
     """
     candidates = [
         project_dir / "sensitivity-pe5y-results.json",
-        Path("D:/AI/baocaotaichinh/output/sensitivity-pe5y-results.json"),
+        project_dir / "output" / "sensitivity-pe5y-results.json",
     ]
     for p in candidates:
         if not p.exists():

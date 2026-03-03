@@ -17,7 +17,7 @@ from pathlib import Path
 
 # Ensure imports work
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-os.environ.setdefault("PE5Y_DB_PATH", "D:/AI/baocaotaichinh/vietnam_stocks.db")
+os.environ.setdefault("PE5Y_DB_PATH", "./vietnam_stocks.db")
 
 from backend.config import get_config
 from backend.strategy.signal import generate_signal, select_top_n
