@@ -19,6 +19,21 @@ from .financial_updater import FinancialProgress, update_financials_stream  # no
 # Date format expected in stock_price_history.time
 _DATE_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
 
+# VCI returns prices in VND; DB convention is thousands of VND
+_VCI_PRICE_SCALE = 1000.0
+
+
+def _normalize_bars(bars: list[dict]) -> list[dict]:
+    """Convert VCI prices from VND to DB scale (thousands of VND)."""
+    return [
+        {**bar,
+         "open": bar["open"] / _VCI_PRICE_SCALE,
+         "high": bar["high"] / _VCI_PRICE_SCALE,
+         "low": bar["low"] / _VCI_PRICE_SCALE,
+         "close": bar["close"] / _VCI_PRICE_SCALE}
+        for bar in bars
+    ]
+
 
 
 def _ts_to_date(ts) -> str | None:
@@ -159,6 +174,7 @@ def update_prices(
             bars = vci.get_ohlcv(sym, count_back=count_back)
             if not bars:
                 continue
+            bars = _normalize_bars(bars)
             with connect_rw(db_path) as conn:
                 sym_inserted = 0
                 for bar in bars:
@@ -274,6 +290,8 @@ def update_prices_stream(
         source = "VCI"
         try:
             bars = vci.get_ohlcv(sym, count_back=count_back)
+            if bars:
+                bars = _normalize_bars(bars)
 
             # Phase 1: try VCI
             if bars:

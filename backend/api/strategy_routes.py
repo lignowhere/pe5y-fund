@@ -4,12 +4,12 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from ..config import get_config
+from ..strategy.benchmark import calc_benchmark_cagr
 from ..strategy.optimizer import optimize
 from ..strategy.position_sizer import portfolio_summary, size_portfolio
 from ..strategy.signal import generate_signal, select_top_n
 
 router = APIRouter(prefix="/api/strategy", tags=["strategy"])
-_cfg = get_config()
 
 
 @router.get("/optimize")
@@ -17,20 +17,36 @@ def optimize_strategy(capital: float = 10_000_000_000, year: int | None = None):
     """Compare select_pct configs for given capital. Returns recommendation."""
     if capital <= 0:
         raise HTTPException(400, "Capital must be positive")
+    _cfg = get_config()
+    sc = _cfg.strategy
     results = optimize(capital, _cfg.db_path, _cfg, formation_year=year)
-    return [
-        {
-            "select_pct": r.select_pct,
-            "stock_count": r.stock_count,
-            "total_deployed_vnd": r.total_deployed_vnd,
-            "cash_drag_pct": r.cash_drag_pct,
-            "avg_fill_rate": r.avg_fill_rate,
-            "max_days_needed": r.max_days_needed,
-            "historical_cagr": r.historical_cagr,
-            "recommended": r.recommended,
-        }
-        for r in results
-    ]
+
+    # Benchmark buy-and-hold CAGR over same backtest period
+    benchmark_cagr = calc_benchmark_cagr(
+        _cfg.db_path,
+        symbol=sc.benchmark_symbol,
+        rebalance_month=sc.rebalance_month,
+    )
+
+    return {
+        "results": [
+            {
+                "select_pct": r.select_pct,
+                "stock_count": r.stock_count,
+                "total_deployed_vnd": r.total_deployed_vnd,
+                "cash_drag_pct": r.cash_drag_pct,
+                "avg_fill_rate": r.avg_fill_rate,
+                "max_days_needed": r.max_days_needed,
+                "historical_cagr": r.historical_cagr,
+                "recommended": r.recommended,
+            }
+            for r in results
+        ],
+        "benchmark": {
+            "symbol": sc.benchmark_symbol,
+            "cagr": benchmark_cagr,
+        },
+    }
 
 
 @router.get("/portfolio")
@@ -39,6 +55,7 @@ def get_portfolio(capital: float = 10_000_000_000, pct: float = 14.0,
     """Full portfolio with position sizing for given capital and select_pct."""
     if capital <= 0:
         raise HTTPException(400, "Capital must be positive")
+    _cfg = get_config()
     import datetime
     fy = year or (datetime.date.today().year - 1)
     hold_year = fy + 1
@@ -95,6 +112,7 @@ def get_portfolio(capital: float = 10_000_000_000, pct: float = 14.0,
 @router.get("/history/sensitivity")
 def sensitivity_data():
     """72-run sensitivity heatmap data from backtest results."""
+    _cfg = get_config()
     from ..strategy.optimizer import _load_sensitivity_data
     data = _load_sensitivity_data(_cfg.db_path.parent)
     if not data:

@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .api.config_routes import router as config_router
 from .api.data_routes import router as data_router
 from .api.strategy_routes import router as strategy_router
 from .api.verify_routes import router as verify_router
@@ -44,6 +45,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(config_router)
 app.include_router(data_router)
 app.include_router(verify_router)
 app.include_router(strategy_router)

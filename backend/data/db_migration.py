@@ -23,6 +23,7 @@ def run_migrations(db_path: Path) -> None:
     _fix_sqlite_sequence(db_path)
     _dedup_financial_tables(db_path)
     _add_financial_indexes(db_path)
+    _fix_price_scale(db_path)
 
 
 # ------------------------------------------------------------------
@@ -186,3 +187,40 @@ def _add_financial_indexes(db_path: Path) -> None:
                 f"""CREATE INDEX IF NOT EXISTS idx_{table}_sym_yr_qtr
                     ON {table}(symbol, year, quarter)"""
             )
+
+
+# ------------------------------------------------------------------
+# Migration 5: fix VCI prices stored in VND instead of thousands
+# ------------------------------------------------------------------
+
+def _fix_price_scale(db_path: Path) -> int:
+    """Fix prices accidentally stored in VND instead of thousands.
+
+    VCI API returns prices in VND (e.g. 66600 for VNM).
+    DB convention: store in thousands (e.g. 66.6 for VNM).
+    The updater previously inserted raw VCI values → ~1000x too high.
+
+    Safe heuristic: the most expensive VN stock is ~250k VND = 250 in
+    thousands.  Any close > 500 is guaranteed to be in the wrong scale.
+    """
+    with connect_rw(db_path) as conn:
+        row = fetch_one(
+            conn,
+            "SELECT COUNT(*) AS n FROM stock_price_history WHERE close > 500",
+            (),
+        )
+        count = (row or {}).get("n", 0)
+        if count == 0:
+            return 0
+
+        log.info("Fixing %d price rows stored in VND instead of thousands", count)
+        conn.execute(
+            """UPDATE stock_price_history
+               SET open  = open  / 1000.0,
+                   high  = high  / 1000.0,
+                   low   = low   / 1000.0,
+                   close = close / 1000.0
+               WHERE close > 500"""
+        )
+        log.info("Fixed %d price rows to thousands scale", count)
+        return count
