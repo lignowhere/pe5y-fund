@@ -1,4 +1,4 @@
-"""Capital → optimal PE5Y config selector.
+"""Capital → optimal PE_TTM_20Q config selector.
 
 Compares select_pct options (10/12/14/16%), evaluates ADV capacity,
 and recommends the config with highest expected return where fill_rate >= 85%.
@@ -12,7 +12,7 @@ from typing import Optional
 
 from ..config import AppConfig
 from .position_sizer import portfolio_summary, size_portfolio
-from .signal import generate_signal, select_top_n
+from .signal_pe_ttm_20q import generate_signal_20q, select_top_n_20q
 
 
 @dataclass
@@ -49,9 +49,10 @@ def optimize(
     today = datetime.date.today().isoformat()
     rebalance_date = rebal_date if rebal_date <= today else None
 
-    candidates = generate_signal(
+    candidates = generate_signal_20q(
         db_path, formation_year, config,
         hold_year=hold_year, rebalance_date=rebalance_date,
+        rebalance_month=9, require_all_positive=False,
     )
     if not candidates:
         return []
@@ -61,7 +62,7 @@ def optimize(
     results: list[ConfigResult] = []
 
     for pct in sc.select_pcts:
-        selected = select_top_n(candidates, pct, min_holdings=10)
+        selected = select_top_n_20q(candidates, pct, min_holdings=10)
         symbols = [c.symbol for c in selected]
 
         positions = size_portfolio(
@@ -104,8 +105,9 @@ def _load_sensitivity_data(project_dir: Path) -> dict[str, float]:
     Returns dict with key format "MM-PCT" e.g. "09-14" for September 14%.
     """
     candidates = [
-        project_dir / "sensitivity-pe5y-results.json",
-        project_dir / "output" / "sensitivity-pe5y-results.json",
+        project_dir / "sensitivity-results.json",
+        project_dir / "output" / "sensitivity-results.json",
+        project_dir / "output" / "strategy-comparison-results.json",
     ]
     for p in candidates:
         if not p.exists():
@@ -115,15 +117,17 @@ def _load_sensitivity_data(project_dir: Path) -> dict[str, float]:
             runs = data.get("runs", []) if isinstance(data, dict) else data
             result = {}
             for entry in runs:
-                mm_dd = entry.get("rebalance_mm_dd", "")
+                strategy = entry.get("strategy", "")
+                if strategy != "PE_TTM_20Q_RELAXED":
+                    continue
+                month = entry.get("rebalance_month")
                 pct = entry.get("select_pct")
-                metrics = entry.get("metrics", {})
-                cagr = metrics.get("net_cagr")
-                if mm_dd and pct is not None and cagr is not None:
-                    month = mm_dd.split("-")[0]
+                cagr = entry.get("net_cagr")
+                if month is not None and pct is not None and cagr is not None:
                     key = f"{int(month):02d}-{float(pct):.0f}"
                     result[key] = round(float(cagr) * 100, 2)
-            return result
+            if result:
+                return result
         except Exception:
             continue
     return {}

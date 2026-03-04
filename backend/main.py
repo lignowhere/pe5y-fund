@@ -1,4 +1,4 @@
-"""PE5Y Fund System — FastAPI entry point."""
+"""PE_TTM_20Q Fund System — FastAPI entry point."""
 from __future__ import annotations
 
 import logging
@@ -32,9 +32,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="PE5Y Fund System",
-    version="0.1.0",
-    description="PE5Y strategy optimizer with data verification",
+    title="PE_TTM_20Q Fund System",
+    version="0.2.0",
+    description="PE_TTM_20Q strategy optimizer with data verification",
     lifespan=lifespan,
 )
 

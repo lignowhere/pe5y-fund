@@ -1,4 +1,4 @@
-"""ADV-aware position sizing for PE5Y portfolio."""
+"""ADV-aware position sizing for portfolio."""
 from __future__ import annotations
 
 import math
@@ -20,7 +20,7 @@ class PositionTarget:
     shares_per_day: int
     days_needed: int
     fill_rate: float
-    pe_5y_avg: Optional[float] = None
+    pe_ratio: Optional[float] = None
     signal_rank: Optional[int] = None
 
 

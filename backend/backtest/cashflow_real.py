@@ -1,6 +1,6 @@
-"""PE5Y Cash Flow Backtest — REAL DATA from vietnam_stocks.db.
+"""PE_TTM_20Q Cash Flow Backtest — REAL DATA from vietnam_stocks.db.
 
-Uses actual PE5Y signal generation and real stock prices.
+Uses actual PE_TTM_20Q signal generation and real stock prices.
 Compares 3 strategies for handling mid-year deposits/withdrawals/dividends.
 
 Formation years: 2015-2024 (rebalance Sep 1 each year)
@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 os.environ.setdefault("PE5Y_DB_PATH", "./vietnam_stocks.db")
 
 from backend.config import get_config
-from backend.strategy.signal import generate_signal, select_top_n
+from backend.strategy.signal_pe_ttm_20q import generate_signal_20q, select_top_n_20q
 
 # ── Parameters ─────────────────────────────────────────────────────
 
@@ -390,13 +390,14 @@ def simulate(
         rebal_date = f"{hold_year}-09-01"
         period_end = f"{hold_year + 1}-08-31"
 
-        # ── Generate PE5Y signal (PE ranked by rebalance date price) ──
-        candidates = generate_signal(
+        # ── Generate PE_TTM_20Q signal (PE ranked by rebalance date price) ──
+        candidates = generate_signal_20q(
             cfg.db_path, fy, cfg,
             hold_year=hold_year,
             rebalance_date=rebal_date,
+            rebalance_month=9, require_all_positive=False,
         )
-        selected = select_top_n(candidates, SELECT_PCT)
+        selected = select_top_n_20q(candidates, SELECT_PCT)
         selected_symbols = [c.symbol for c in selected]
 
         # Get rebalance-day prices for BOTH old positions and new selections
@@ -577,7 +578,7 @@ def run_backtest(seed: int = SEED):
     formation_years = FORMATION_YEARS
 
     print(f"\n{'='*80}")
-    print(f"  PE5Y CASH FLOW BACKTEST — REAL DATA")
+    print(f"  PE_TTM_20Q CASH FLOW BACKTEST — REAL DATA")
     print(f"{'='*80}")
     print(f"  DB: {cfg.db_path}")
     print(f"  Initial NAV: {fmt_vnd(initial_nav)} | select_pct: {SELECT_PCT}%")
@@ -690,8 +691,9 @@ def run_backtest(seed: int = SEED):
         buy_date = f"{hold_yr}-09-01"
         sell_date = f"{hold_yr + 1}-09-01"
 
-        cands = generate_signal(cfg.db_path, fy, cfg, hold_year=hold_yr, rebalance_date=buy_date)
-        sel = select_top_n(cands, SELECT_PCT)
+        cands = generate_signal_20q(cfg.db_path, fy, cfg, hold_year=hold_yr, rebalance_date=buy_date,
+                                    rebalance_month=9, require_all_positive=False)
+        sel = select_top_n_20q(cands, SELECT_PCT)
         sel_syms = [c.symbol for c in sel]
         if not sel_syms:
             annual_rets.append(0.0)
@@ -731,7 +733,7 @@ def run_backtest(seed: int = SEED):
 
     best = max(results[1:], key=lambda r: r.twr_annual)
     worst = min(results[1:], key=lambda r: r.twr_annual)
-    print(f"  Baseline (pure PE5Y):  TWR {fmt_pct(baseline_twr * 100)}")
+    print(f"  Baseline (pure PE_TTM_20Q):  TWR {fmt_pct(baseline_twr * 100)}")
     print(f"  Best with cash flows:  {best.name} TWR {fmt_pct(best.twr_annual * 100)}")
     print(f"  Worst with cash flows: {worst.name} TWR {fmt_pct(worst.twr_annual * 100)}")
     print(f"  TWR gap (best-worst):  {fmt_pct((best.twr_annual - worst.twr_annual) * 100)}")

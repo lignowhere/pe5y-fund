@@ -1,4 +1,4 @@
-"""Central configuration for PE5Y Fund System."""
+"""Central configuration for PE_TTM_20Q Fund System."""
 from __future__ import annotations
 
 import json

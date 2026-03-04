@@ -7,7 +7,7 @@ from ..config import get_config
 from ..strategy.benchmark import calc_benchmark_cagr
 from ..strategy.optimizer import optimize
 from ..strategy.position_sizer import portfolio_summary, size_portfolio
-from ..strategy.signal import generate_signal, select_top_n
+from ..strategy.signal_pe_ttm_20q import generate_signal_20q, select_top_n_20q
 
 router = APIRouter(prefix="/api/strategy", tags=["strategy"])
 
@@ -64,11 +64,12 @@ def get_portfolio(capital: float = 10_000_000_000, pct: float = 14.0,
     today = datetime.date.today().isoformat()
     rebalance_date = rebal_date if rebal_date <= today else None
 
-    candidates = generate_signal(
+    candidates = generate_signal_20q(
         _cfg.db_path, fy, _cfg,
         hold_year=hold_year, rebalance_date=rebalance_date,
+        rebalance_month=9, require_all_positive=False,
     )
-    selected = select_top_n(candidates, pct)
+    selected = select_top_n_20q(candidates, pct)
     symbols = [c.symbol for c in selected]
 
     sc = _cfg.strategy
@@ -82,7 +83,7 @@ def get_portfolio(capital: float = 10_000_000_000, pct: float = 14.0,
     for p in positions:
         sig = signal_map.get(p.symbol)
         if sig:
-            p.pe_5y_avg = sig.pe_5y_avg
+            p.pe_ratio = sig.pe_ttm_20q
             p.signal_rank = sig.signal_rank
 
     summary = portfolio_summary(positions, capital)
@@ -95,7 +96,7 @@ def get_portfolio(capital: float = 10_000_000_000, pct: float = 14.0,
             {
                 "symbol": p.symbol,
                 "signal_rank": p.signal_rank,
-                "pe_5y_avg": round(p.pe_5y_avg, 2) if p.pe_5y_avg else None,
+                "pe_ratio": round(p.pe_ratio, 2) if p.pe_ratio else None,
                 "current_price_vnd": p.current_price_vnd,
                 "target_shares": p.target_shares,
                 "target_value_vnd": p.target_value_vnd,
