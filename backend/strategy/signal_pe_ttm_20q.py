@@ -42,6 +42,7 @@ def generate_signal_20q(
     rebalance_date: Optional[str] = None,
     rebalance_month: int = 9,
     require_all_positive: bool = True,
+    require_last_n_positive: int = 0,
     ktpl_leakage: Optional[dict[str, float]] = None,
 ) -> list[PE20QCandidate]:
     """Generate PE_TTM_20Q ranked candidate list.
@@ -50,6 +51,7 @@ def generate_signal_20q(
     Same market cap and liquidity filters as PE5Y.
 
     When require_all_positive=False, only requires avg EPS > 0 (relaxed filter).
+    When require_last_n_positive > 0, last N quarters must all have EPS > 0.
     When ktpl_leakage is provided, adjusts EPS: adj_eps = eps * (1 - ratio).
     """
     if hold_year is None:
@@ -61,8 +63,12 @@ def generate_signal_20q(
 
         # 1) Quarterly EPS candidates
         latest_y, latest_q = _latest_quarter(hold_year, rebalance_month)
+        # If the theoretical latest quarter has no data yet (pre-rebalance),
+        # fall back to the most recent quarter actually available in DB
+        latest_y, latest_q = _clamp_to_available(conn, latest_y, latest_q)
         eps_df = _query_quarterly_eps(conn, latest_y, latest_q,
-                                      require_all_positive=require_all_positive)
+                                      require_all_positive=require_all_positive,
+                                      require_last_n_positive=require_last_n_positive)
         if not eps_df:
             return []
 
@@ -94,6 +100,7 @@ def generate_signal_20q(
             prices = _query_latest_close(conn, formation_year)
 
         # 5) Compute PE and rank
+        # Annualize avg quarterly EPS (×4) so PE matches traditional convention
         candidates: list[PE20QCandidate] = []
         for e in eps_df:
             sym = e["symbol"]
@@ -101,8 +108,9 @@ def generate_signal_20q(
             if not close or close <= 0:
                 continue
             buy_vnd = close * CLOSE_SCALE_VND
-            pe = buy_vnd / e["avg_eps"]
-            if pe <= 1.0 or not math.isfinite(pe):
+            annual_eps = e["avg_eps"] * 4
+            pe = buy_vnd / annual_eps
+            if pe <= 0.25 or not math.isfinite(pe):
                 continue
             candidates.append(PE20QCandidate(
                 symbol=sym, avg_eps_20q=e["avg_eps"],
@@ -137,16 +145,40 @@ def _quarter_key(year: int, quarter: int) -> int:
     return year * 10 + quarter
 
 
+def _clamp_to_available(
+    conn: sqlite3.Connection, target_y: int, target_q: int,
+) -> tuple[int, int]:
+    """Clamp (year, quarter) to the latest quarter with actual data in DB.
+
+    If the target quarter already has data, returns it unchanged.
+    Otherwise returns the most recent quarter that has EPS data.
+    """
+    target_key = _quarter_key(target_y, target_q)
+    row = conn.execute("""
+        SELECT MAX(year * 10 + quarter) as max_key
+        FROM financial_ratios
+        WHERE quarter IS NOT NULL AND quarter <= 4
+          AND eps_vnd IS NOT NULL
+          AND (year * 10 + quarter) <= ?
+    """, (target_key,)).fetchone()
+    if row and row["max_key"]:
+        actual_key = int(row["max_key"])
+        return actual_key // 10, actual_key % 10
+    return target_y, target_q
+
+
 # --- SQL queries (parallel to signal.py) ---
 
 def _query_quarterly_eps(
     conn: sqlite3.Connection, end_year: int, end_quarter: int,
     *, require_all_positive: bool = True,
+    require_last_n_positive: int = 0,
 ) -> list[dict]:
     """20 quarters of quarterly EPS.
 
     require_all_positive=True: all 20 quarters must have EPS > 0 (strict).
     require_all_positive=False: only avg EPS > 0 required (relaxed).
+    require_last_n_positive>0: last N quarters must all have EPS > 0.
     """
     end_key = _quarter_key(end_year, end_quarter)
     # 20 quarters back: 5 years back, same quarter + 1
@@ -178,6 +210,10 @@ def _query_quarterly_eps(
             continue
         if require_all_positive and any(e <= 0 for e in eps_list):
             continue
+        if require_last_n_positive > 0:
+            last_n = eps_list[-require_last_n_positive:]
+            if len(last_n) < require_last_n_positive or any(e <= 0 for e in last_n):
+                continue
         avg_eps = sum(eps_list) / len(eps_list)
         if avg_eps <= 0:
             continue

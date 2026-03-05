@@ -1,6 +1,6 @@
 # Deployment Guide
 
-> Last updated: 2026-03-03
+> Last updated: 2026-03-04
 
 ## Prerequisites
 
@@ -8,7 +8,7 @@
 - Node.js 20+
 - SQLite database file (`vietnam_stocks.db`) — obtain separately (not in git)
 
-## PE5Y Backend
+## Fund Backend (PE_TTM_20Q)
 
 ### Environment Setup
 
@@ -28,6 +28,8 @@ pip install -r requirements.txt
 # From project root (so relative DB path resolves correctly)
 uvicorn backend.main:app --host 127.0.0.1 --port 8002 --reload
 ```
+
+App starts as "PE_TTM_20Q Fund System" v0.2.0.
 
 ### Config Overrides
 
@@ -88,20 +90,35 @@ Requires a PostgreSQL instance. Set `DATABASE_URL` in `backend/.env`.
   GET /api/data/update/financials/stream
   ```
 - The background scheduler auto-updates every 6 hours when the backend is running
+- `financial_ratios` table must contain quarterly rows (`quarter=1-4`) for PE_TTM_20Q signal to function
 
 ## Sensitivity JSON (Optional)
 
-For historical CAGR display in the optimizer, place `sensitivity-pe5y-results.json` at:
+For historical CAGR heatmap in the optimizer, place `sensitivity-pe5y-results.json` at:
 - `./sensitivity-pe5y-results.json` (project root), or
 - `./output/sensitivity-pe5y-results.json`
 
 The optimizer searches both locations via `_load_sensitivity_data(db_path.parent)`.
 
+To regenerate from scratch:
+
+```bash
+# From project root
+python -m backend.backtest.run_comparison
+# Writes output/sensitivity-pe5y-results.json
+```
+
 ## Running the Backtest
 
 ```bash
-# From project root (sets PE5Y_DB_PATH=./vietnam_stocks.db internally)
+# Real data backtest using PE_TTM_20Q_RELAXED (from project root)
 python -m backend.backtest.cashflow_real
+
+# Multi-strategy sensitivity sweep (12 months x 4 pcts x 3 strategies)
+python -m backend.backtest.run_comparison
+
+# Capital deployment comparison (add_existing vs fresh_signal)
+python -m backend.backtest.run_deployment
 ```
 
 ## SEO Automation

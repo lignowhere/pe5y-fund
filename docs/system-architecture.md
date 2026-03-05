@@ -1,21 +1,21 @@
 # System Architecture
 
-> Last updated: 2026-03-03
+> Last updated: 2026-03-04
 
 ## High-Level Overview
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    PE5Y Fund System                      │
+│               PE_TTM_20Q Fund System v0.2.0              │
 ├──────────────┬──────────────────┬───────────────────────┤
-│   Frontend   │   PE5Y Backend   │  Inventory Backend    │
+│   Frontend   │   Fund Backend   │  Inventory Backend    │
 │  (Next.js)   │   (FastAPI)      │  (Express/Prisma)     │
 │  port:3000   │   port:8002      │  port:3001            │
 ├──────────────┴──────────────────┴───────────────────────┤
 │                                                          │
 │  ┌──────────┐   ┌──────────┐   ┌──────────────────────┐ │
 │  │ SQLite   │   │PostgreSQL│   │ Cloudflare D1        │ │
-│  │ (PE5Y)   │   │(Inventory)│  │ (SEO Automation)     │ │
+│  │ (Fund)   │   │(Inventory)│  │ (SEO Automation)     │ │
 │  │ local    │   └──────────┘   └──────────────────────┘ │
 │  │ gitignore│                                            │
 │  └──────────┘                                            │
@@ -28,7 +28,7 @@
 └─────────────────────────────────────────────────────────┘
 ```
 
-## PE5Y Backend Architecture
+## Fund Backend Architecture
 
 ### Request Flow
 
@@ -36,7 +36,7 @@
 Client Request
     │
     ▼
-FastAPI App (main.py)
+FastAPI App (main.py — v0.2.0)
     │
     ├─ CORS middleware (localhost:3000)
     │
@@ -46,19 +46,23 @@ FastAPI App (main.py)
     └─ /api/strategy/*  → strategy_routes.py
 ```
 
-### Strategy Pipeline
+### Strategy Pipeline (PE_TTM_20Q_RELAXED)
 
 ```
 optimize(capital, year)
     │
     ▼
-signal.py: generate_signal()
+signal_pe_ttm_20q.py: generate_signal_20q(require_all_positive=False)
     │
-    ├─ 1. Query 5-year EPS (all positive, min 3-5 years)
-    ├─ 2. Market cap filter (dynamic by year)
-    ├─ 3. Liquidity filters (trading days, ADV, zero vol, stale)
-    ├─ 4. Compute pe_5y_avg = price / avg_eps_5y
-    └─ 5. Rank ascending by pe_5y_avg
+    ├─ 1. Determine latest available quarter via _LATEST_Q_BY_MONTH[month]
+    │      (prevents look-ahead bias — ~2-month reporting lag)
+    ├─ 2. Query 20 quarters of quarterly EPS (quarter=1-4 in financial_ratios)
+    ├─ 3. Filter: avg(quarterly_eps) > 0  [RELAXED — not all positive]
+    ├─ 4. Market cap filter (dynamic by year: 200B * 1.1^periods)
+    ├─ 5. Liquidity filters (trading days, ADV, zero vol, stale close)
+    ├─ 6. Compute pe_ratio = price_vnd / avg_quarterly_eps_20q
+    └─ 7. Rank ascending by pe_ratio → list[PE20QCandidate]
+    │      Universe: 21-26 stocks (vs 11-12 for strict/PE5Y)
     │
     ▼
 optimizer.py: optimize()
@@ -70,7 +74,7 @@ optimizer.py: optimize()
     └─ Return all configs + recommendation
     │
     ├─ benchmark.py: calc_benchmark_cagr()
-    │   └─ VNINDEX buy-and-hold CAGR over same period
+    │   └─ VNINDEX buy-and-hold CAGR over same period (8.66%)
     │
     ▼
 position_sizer.py: size_portfolio()
@@ -79,6 +83,40 @@ position_sizer.py: size_portfolio()
     ├─ Lot-sized: floor(target_value / price / 100) * 100
     ├─ ADV-constrained: shares_per_day = ADV * 10% participation
     └─ Fill rate: min(1.0, spd * accum_days / target_shares)
+    │
+    └─ Returns Position objects with pe_ratio field
+```
+
+### Signal File Routing
+
+```
+Production path:
+    strategy_routes.py → generate_signal_20q (signal_pe_ttm_20q.py)
+    cashflow_real.py   → generate_signal_20q (signal_pe_ttm_20q.py)
+
+Reference/comparison only:
+    sensitivity_runner.py → generate_signal (signal.py, PE5Y)
+    run_comparison.py     → both signals via sensitivity_runner
+```
+
+### Backtest Architecture
+
+```
+sensitivity_runner.py
+    │
+    ├─ Sweep: 12 rebalance months × 4 select_pcts × 3 strategies
+    │          (PE5Y, PE_TTM_20Q_strict, PE_TTM_20Q_RELAXED)
+    │
+    ├─ save_for_optimizer() → sensitivity-pe5y-results.json
+    │   └─ Loaded by optimizer for heatmap endpoint
+    │
+    └─ Results: CAGR, win_rate, max_drawdown per combination
+
+capital_deployment_sim.py
+    │
+    ├─ add_existing: deploy new capital into existing portfolio weights
+    └─ fresh_signal: liquidate + rebuild at new capital
+    └─ Conclusion: negligible difference < 0.4pp → add_existing preferred
 ```
 
 ### Rebalance Calculator Flow
@@ -160,13 +198,13 @@ VCIFinancialRow                          KBSFinancialRow
 ## Frontend Architecture
 
 ```
-Next.js App Router
+Next.js App Router (title: "PE_TTM_20Q Strategy Optimizer")
     │
     ├─ / (Dashboard)
     │   └─ Input capital → POST optimize → Display 4 config cards + VNINDEX benchmark
     │
     ├─ /portfolio
-    │   ├─ capital + pct params → GET portfolio → Position table (sortable, CSV copy)
+    │   ├─ capital + pct params → GET portfolio → Position table (pe_ratio col, sortable, CSV copy)
     │   ├─ RebalanceCalculator (collapsible)
     │   │   └─ Input cashFlow → GET portfolio(newCapital) → computeTrades() → buy/sell list
     │   └─ ADV Detail (expandable)
@@ -199,6 +237,16 @@ export const api = {
   saveStrategyConfig: (data) => putJson("/api/strategy/config", data),
   resetStrategyConfig: () => postJson("/api/strategy/config/reset"),
 };
+
+// Position interface uses pe_ratio (renamed from pe_5y_avg)
+interface Position {
+  symbol: string;
+  signal_rank: number;
+  pe_ratio: number;       // pe = price_vnd / avg_quarterly_eps_20q
+  current_price_vnd: number;
+  fill_rate: number;
+  // ...
+}
 
 // Shared SSE helper — returns AbortController for cancellation
 function _streamSSE(url, onEvent, onDone): AbortController
@@ -259,9 +307,15 @@ SiteCrawler DO
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| PE5Y DB | SQLite, local, gitignored | Single-file portability; 1.6GB excluded from git; path via env var |
-| PE5Y backend | FastAPI | Async support, auto-docs, Python ecosystem for finance |
-| No ORM for PE5Y | Raw SQL | Performance-critical aggregate queries, complex GROUP BY/HAVING |
+| Production signal | PE_TTM_20Q_RELAXED | +1.92pp CAGR over PE5Y; 88% win rate; larger universe (21-26 vs 11-12) |
+| PE5Y retention | `signal.py` kept, not imported in prod | Reference for comparison backtests; historical continuity |
+| KTPL adjustment | Rejected | Tested: too noisy, -0.5pp — complexity without benefit |
+| Capital deployment | add_existing preferred | Negligible diff vs fresh_signal (<0.4pp); avoids transaction costs |
+| Fund DB | SQLite, local, gitignored | Single-file portability; 1.6GB excluded from git; path via env var |
+| Fund backend | FastAPI | Async support, auto-docs, Python ecosystem for finance |
+| No ORM for fund | Raw SQL | Performance-critical aggregate queries, complex GROUP BY/HAVING |
+| Quarterly EPS | `quarter=1-4` in `financial_ratios` | Annual EPS uses `quarter=NULL`; different filter in SQL |
+| Look-ahead bias | `_LATEST_Q_BY_MONTH` mapping | Enforces ~2-month reporting lag; prevents future-data leakage |
 | Inventory DB | PostgreSQL + Prisma | Relational integrity, migrations, type-safe ORM |
 | Frontend | Next.js 16 | React 19, App Router, Tailwind CSS integration |
 | Config | Frozen dataclasses + JSON overrides | Immutable defaults + runtime mutability without restart |
@@ -271,12 +325,13 @@ SiteCrawler DO
 | Rebalance Calculator | Client-side diff of two `/portfolio` calls | No new backend endpoint; reuses existing position sizer |
 | Shared formatters | `lib/format.ts` | DRY — avoids duplicating VND/price/color logic across components |
 | Benchmark | VNINDEX buy-and-hold CAGR | Strategy vs passive index comparison in optimize response |
+| Field name | `pe_ratio` (not `pe_5y_avg`) | Generalized for PE_TTM_20Q; breaking change in API v0.2.0 |
 
 ## Ports & Services
 
 | Service | Port | Protocol |
 |---------|------|----------|
-| PE5Y Backend (FastAPI) | 8002 | HTTP |
+| Fund Backend (FastAPI) | 8002 | HTTP |
 | Inventory Backend (Express) | 3001 | HTTP |
 | Frontend (Next.js) | 3000 | HTTP |
-| SEO Worker | - | Cloudflare Workers |
+| SEO Worker | — | Cloudflare Workers |

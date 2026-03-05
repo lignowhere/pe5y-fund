@@ -32,6 +32,9 @@ def optimize(
     db_path: Path,
     config: AppConfig,
     formation_year: Optional[int] = None,
+    rebalance_month: Optional[int] = None,
+    require_all_positive: bool = False,
+    require_last_n_positive: int = 0,
 ) -> list[ConfigResult]:
     """Compare select_pct options and recommend the best one.
 
@@ -42,22 +45,24 @@ def optimize(
       4. Score: highest CAGR where fill_rate >= 85%
     """
     import datetime
+    sc = config.strategy
+    month = rebalance_month or sc.rebalance_month
     if formation_year is None:
         formation_year = datetime.date.today().year - 1
     hold_year = formation_year + 1
-    rebal_date = f"{hold_year}-09-01"
+    rebal_date = f"{hold_year}-{month:02d}-01"
     today = datetime.date.today().isoformat()
     rebalance_date = rebal_date if rebal_date <= today else None
 
     candidates = generate_signal_20q(
         db_path, formation_year, config,
         hold_year=hold_year, rebalance_date=rebalance_date,
-        rebalance_month=9, require_all_positive=False,
+        rebalance_month=month, require_all_positive=require_all_positive,
+        require_last_n_positive=require_last_n_positive,
     )
     if not candidates:
         return []
 
-    sc = config.strategy
     historical = _load_sensitivity_data(db_path.parent)
     results: list[ConfigResult] = []
 
@@ -72,7 +77,7 @@ def optimize(
             lot_size=sc.lot_size,
         )
         summary = portfolio_summary(positions, capital_vnd)
-        cagr = historical.get(f"09-{pct:.0f}")
+        cagr = historical.get(f"{month:02d}-{pct:.0f}")
 
         results.append(ConfigResult(
             select_pct=pct,

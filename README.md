@@ -1,18 +1,20 @@
-# PE5Y Fund System
+# PE_TTM_20Q Fund System
 
-Quantitative investment tool for Vietnam stock market using the PE5Y (Price-to-Earnings 5-Year Average) strategy.
+Quantitative investment tool for Vietnam stock market using the PE_TTM_20Q_RELAXED strategy.
 
-## What is PE5Y?
+## What is PE_TTM_20Q?
 
-Select stocks with the lowest P/E ratio based on 5-year average EPS. The strategy applies market cap, liquidity, and data quality filters, then sizes positions with ADV (Average Daily Volume) constraints. Rebalances annually on September 1.
+Select stocks with the lowest P/E ratio based on 20-quarter trailing average EPS. The RELAXED variant only requires avg EPS > 0 (not all 20 quarters positive), yielding a larger universe (21-26 stocks vs 11-12 for strict). Applies market cap, liquidity, and data quality filters, then sizes positions with ADV (Average Daily Volume) constraints. Rebalances annually on September 1.
 
-**Backtested CAGR**: ~32% (Sep-1, 14% select, 2015-2025)
+**Backtested CAGR**: 31.74% (PE_TTM_20Q_RELAXED, Sep-1, 14% select, 2015-2025) vs VNINDEX 8.66%
+
+> PE5Y (5-year annual EPS) is retained in `backend/strategy/signal.py` for reference and comparison backtests.
 
 ## Architecture
 
 ```
 ┌──────────────┬──────────────────┬───────────────────────┐
-│   Frontend   │   PE5Y Backend   │  Inventory Backend    │
+│   Frontend   │  Fund Backend    │  Inventory Backend    │
 │  (Next.js)   │   (FastAPI)      │  (Express/Prisma)     │
 │  :3000       │   :8002          │  :3001                │
 └──────────────┴──────────────────┴───────────────────────┘
@@ -30,14 +32,14 @@ Select stocks with the lowest P/E ratio based on 5-year average EPS. The strateg
 
 | Project | Stack | Purpose |
 |---------|-------|---------|
-| **PE5Y Backend** | Python, FastAPI, SQLite | Strategy engine, data pipeline, backtesting |
+| **Fund Backend** | Python, FastAPI, SQLite | Strategy engine, data pipeline, backtesting |
 | **Frontend** | Next.js 16, React 19, Tailwind | Dashboard, portfolio viewer, config, data management |
 | **Inventory Backend** | Express 5, Prisma, PostgreSQL | Multi-channel inventory management |
 | **SEO Automation** | Cloudflare Workers, Hono, D1 | Automated SEO scanning + AI rewrite |
 
 ## Quick Start
 
-### PE5Y Backend (Python)
+### Fund Backend (Python)
 
 ```bash
 # Install dependencies
@@ -102,11 +104,20 @@ npm run dev   # http://localhost:3001
 
 ## Strategy Pipeline
 
-1. **Signal generation** — Query 5-year annual EPS (all positive), apply market cap floor (200B VND base, +10%/2yr), apply liquidity filters (trading days, ADV, zero volume, stale close)
-2. **Ranking** — Compute `pe_5y_avg = price_vnd / avg_eps_5y`, rank ascending
+1. **Signal generation** — Query 20 quarters of quarterly EPS, apply market cap floor (200B VND base, +10%/2yr from 2015), apply liquidity filters (trading days, ADV, zero volume, stale close)
+2. **Ranking** — Compute `pe_ratio = price_vnd / avg_quarterly_eps[20q]`, rank ascending
 3. **Selection** — Top N% of universe (configurable: 10/12/14/16%)
 4. **Position sizing** — Equal-weight with ADV constraints (10% participation, 100-share lots)
 5. **Optimization** — Recommend config with highest historical CAGR where fill_rate >= 85%
+
+## Backtest Summary
+
+| Strategy | CAGR | Universe size | Notes |
+|----------|------|---------------|-------|
+| PE_TTM_20Q_RELAXED | **31.74%** | 21-26 stocks | **Production** |
+| PE5Y | 29.82% | 11-12 stocks | Reference only |
+| VNINDEX | 8.66% | — | Benchmark |
+| KTPL-adjusted | ~31.2% | 21-26 stocks | Tested, rejected (noisy, -0.5pp) |
 
 ## Data Sources
 
@@ -116,13 +127,13 @@ npm run dev   # http://localhost:3001
 
 ## Database
 
-### SQLite (PE5Y) — `./vietnam_stocks.db`
+### SQLite (Fund) — `./vietnam_stocks.db`
 - Stored locally, gitignored (not committed to repository)
 - Configure path via `PE5Y_DB_PATH` env var (defaults to `./vietnam_stocks.db`)
 - `stocks` — ticker, company name
 - `stock_exchange` — ticker to exchange mapping (HSX/HNX/UPCOM)
 - `stock_price_history` — daily OHLCV (close stored in thousands of VND)
-- `financial_ratios` — annual/quarterly EPS, P/E, P/B, ROE, market cap
+- `financial_ratios` — annual/quarterly EPS, P/E, P/B, ROE, market cap (annual: `quarter=NULL`; quarterly: `quarter=1-4`)
 
 ### PostgreSQL (Inventory)
 - User, Warehouse, Product, Inventory, InventoryMovement, StockTransfer, BatchLot
@@ -142,12 +153,14 @@ Detailed docs in [`./docs/`](./docs/):
 - [Codebase Summary](./docs/codebase-summary.md)
 - [Code Standards](./docs/code-standards.md)
 - [System Architecture](./docs/system-architecture.md)
+- [Project Roadmap](./docs/project-roadmap.md)
+- [Deployment Guide](./docs/deployment-guide.md)
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| PE5Y Backend | Python 3.12+, FastAPI, httpx, APScheduler, SQLite |
+| Fund Backend | Python 3.12+, FastAPI, httpx, APScheduler, SQLite |
 | Inventory Backend | Node.js, Express 5, Prisma, PostgreSQL, Zod |
 | Frontend | Next.js 16, React 19, Tailwind CSS 4, TypeScript |
 | SEO Automation | Cloudflare Workers, Hono, D1, Durable Objects |

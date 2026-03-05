@@ -22,6 +22,8 @@ class PositionTarget:
     fill_rate: float
     pe_ratio: Optional[float] = None
     signal_rank: Optional[int] = None
+    buy_price_vnd: Optional[float] = None
+    gain_pct: Optional[float] = None
 
 
 def size_portfolio(
@@ -88,12 +90,30 @@ def size_portfolio(
 
 def portfolio_summary(positions: list[PositionTarget],
                       capital_vnd: float) -> dict:
-    """Compute aggregate portfolio metrics."""
+    """Compute aggregate portfolio metrics incl. gain vs buy price."""
     total_deployed = sum(p.target_value_vnd for p in positions)
     cash_drag = capital_vnd - total_deployed
     avg_fill = (sum(p.fill_rate for p in positions) / len(positions)
                 if positions else 0.0)
     max_days = max((p.days_needed for p in positions), default=0)
+
+    # Portfolio-level gain: weighted by deployed value
+    positions_with_gain = [p for p in positions if p.buy_price_vnd and p.gain_pct is not None]
+    if positions_with_gain:
+        buy_total = sum(p.buy_price_vnd * p.target_shares
+                        for p in positions_with_gain if p.buy_price_vnd)
+        cur_total = sum(p.current_price_vnd * p.target_shares
+                        for p in positions_with_gain)
+        portfolio_gain_pct = round((cur_total / buy_total - 1) * 100, 2) if buy_total else None
+        portfolio_gain_vnd = round(cur_total - buy_total)
+        gainers = sum(1 for p in positions_with_gain if (p.gain_pct or 0) > 0)
+        losers = sum(1 for p in positions_with_gain if (p.gain_pct or 0) < 0)
+    else:
+        portfolio_gain_pct = None
+        portfolio_gain_vnd = None
+        gainers = 0
+        losers = 0
+
     return {
         "stock_count": len(positions),
         "total_deployed_vnd": total_deployed,
@@ -101,6 +121,10 @@ def portfolio_summary(positions: list[PositionTarget],
         "cash_drag_pct": round(cash_drag / capital_vnd * 100, 2) if capital_vnd else 0,
         "avg_fill_rate": round(avg_fill, 4),
         "max_days_needed": max_days,
+        "portfolio_gain_pct": portfolio_gain_pct,
+        "portfolio_gain_vnd": portfolio_gain_vnd,
+        "gainers": gainers,
+        "losers": losers,
     }
 
 

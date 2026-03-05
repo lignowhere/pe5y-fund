@@ -1,0 +1,13 @@
+{
+  "name": "pe5y-fund",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,green \"uvicorn backend.main:app --host 127.0.0.1 --port 8002 --reload --reload-dir backend\" \"cd frontend && npm run dev\"",
+    "backend": "uvicorn backend.main:app --host 127.0.0.1 --port 8002 --reload --reload-dir backend",
+    "frontend": "cd frontend && npm run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}
