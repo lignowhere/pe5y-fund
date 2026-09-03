@@ -49,6 +49,7 @@ function mapSSEtoProgress(
     const count = unitField === "bars" ? (ev.bars ?? 0) : (ev.rows ?? 0);
     setProgress((p) => ({
       ...p,
+      total: ev.total ?? p.total,
       current: (ev.index ?? 0) + 1,
       currentSymbol: ev.symbol ?? "",
       updated: ev.updated ?? p.updated,
@@ -66,6 +67,11 @@ function mapSSEtoProgress(
     setProgress((p) => ({
       ...p, phase: "done",
       remainingMissing: ev.remaining_missing,
+      runStatus: ev.run_status,
+      message: ev.message,
+      broadPriceDate: ev.broad_price_date,
+      latestMarketDate: ev.latest_market_date,
+      provisionalPrices: ev.provisional_prices,
     }));
   }
 }

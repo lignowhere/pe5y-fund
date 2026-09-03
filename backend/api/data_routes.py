@@ -152,13 +152,28 @@ def stream_price_update(count_back: int = 30):
                     "updated": run.get("prices_updated", 0),
                     "failed": run.get("prices_failed", 0),
                     "inserted": run.get("prices_updated", 0),
+                    "run_status": run.get("status"),
+                    "message": run.get("message"),
+                    "broad_price_date": status.get("broad_price_date"),
+                    "latest_market_date": status.get("latest_market_date"),
+                    "provisional_prices": status.get("provisional_prices"),
                 })
                 return
-            yield _sse({"type": "done", "remaining_missing": -1})
+            yield _sse({
+                "type": "done",
+                "remaining_missing": -1,
+                "run_status": "failed",
+                "message": "Không nhận được trạng thái hoàn tất từ tác vụ đồng bộ.",
+            })
         except Exception as e:
             log.error("Price stream failed: %s", e)
             yield _sse({"type": "error", "message": "Internal update error"})
-            yield _sse({"type": "done", "remaining_missing": -1})
+            yield _sse({
+                "type": "done",
+                "remaining_missing": -1,
+                "run_status": "failed",
+                "message": "Cập nhật giá gặp lỗi máy chủ.",
+            })
 
     return StreamingResponse(
         generate(), media_type="text/event-stream", headers=_SSE_HEADERS,
@@ -206,13 +221,28 @@ def stream_financials_update(year: int | None = None):
                     "updated": run.get("financials_updated", 0),
                     "failed": run.get("financials_failed", 0),
                     "inserted": run.get("financial_rows_staged", 0),
+                    "run_status": run.get("status"),
+                    "message": run.get("message"),
+                    "broad_price_date": status.get("broad_price_date"),
+                    "latest_market_date": status.get("latest_market_date"),
+                    "provisional_prices": status.get("provisional_prices"),
                 })
                 return
-            yield _sse({"type": "done", "remaining_missing": -1})
+            yield _sse({
+                "type": "done",
+                "remaining_missing": -1,
+                "run_status": "failed",
+                "message": "Không nhận được trạng thái hoàn tất từ tác vụ đồng bộ.",
+            })
         except Exception as e:
             log.error("Financials stream failed: %s", e)
             yield _sse({"type": "error", "message": "Internal update error"})
-            yield _sse({"type": "done", "remaining_missing": -1})
+            yield _sse({
+                "type": "done",
+                "remaining_missing": -1,
+                "run_status": "failed",
+                "message": "Cập nhật tài chính gặp lỗi máy chủ.",
+            })
 
     return StreamingResponse(
         generate(), media_type="text/event-stream", headers=_SSE_HEADERS,

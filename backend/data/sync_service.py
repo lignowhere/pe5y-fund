@@ -26,7 +26,7 @@ from ..fund.snapshots import (
     strategy_config_fingerprint,
 )
 from ..fund.adjusted_prices import ensure_adjusted_performance_prices
-from ..fund.cycle import resolve_active_cycle
+from ..fund.cycle import PlannerDataError, resolve_active_cycle
 from ..fund.store import get_preferences
 from .financial_snapshot import (
     activate_staged_financials,
@@ -484,19 +484,35 @@ def run_full_sync(config: AppConfig) -> dict[str, object]:
                     )
                 ):
                     preferences = get_preferences(db_path)
-                    active_cycle = resolve_active_cycle(
-                        config,
-                        preferences["strategy"],
-                        float(preferences["select_pct"]),
-                    )
-                    _update_run(db_path, run_id, stage="adjusted_prices")
-                    ensure_adjusted_performance_prices(
-                        config,
-                        active_cycle,
-                        valuation_date,
-                        client=vci,
-                        extra_symbols=[config.strategy.benchmark_symbol],
-                    )
+                    try:
+                        active_cycle = resolve_active_cycle(
+                            config,
+                            preferences["strategy"],
+                            float(preferences["select_pct"]),
+                        )
+                        _update_run(db_path, run_id, stage="adjusted_prices")
+                        ensure_adjusted_performance_prices(
+                            config,
+                            active_cycle,
+                            valuation_date,
+                            client=vci,
+                            extra_symbols=[config.strategy.benchmark_symbol],
+                        )
+                    except PlannerDataError as exc:
+                        # A new hold-year can start before its strategy snapshot exists.
+                        # Raw price/financial data is still usable, so do not turn the
+                        # whole data sync into a failed run for this expected condition.
+                        snapshot_warning = (
+                            "Đồng bộ dữ liệu đã hoàn tất, nhưng chưa làm mới được "
+                            "giá hiệu suất điều chỉnh: "
+                            f"{exc}"
+                        )
+                        _update_run(
+                            db_path,
+                            run_id,
+                            stage="adjusted_prices_blocked",
+                            message=snapshot_warning[:500],
+                        )
 
             _cleanup_stale_sync_state(db_path, run_id)
             refresh_data_health_summary(db_path)

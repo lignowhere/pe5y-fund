@@ -19,6 +19,15 @@ export interface UpdateProgress {
   failed: number;
   inserted: number;
   remainingMissing?: number;
+  runStatus?: string;
+  message?: string | null;
+  broadPriceDate?: string | null;
+  latestMarketDate?: string | null;
+  provisionalPrices?: {
+    rows: number;
+    symbols: number;
+    latest: string | null;
+  };
   log: LogEntry[];
 }
 
@@ -65,7 +74,17 @@ export function UpdateProgressPanel({ progress, label, unitLabel, accentColor }:
   if (progress.phase === "idle") return null;
 
   const pct = progress.total > 0 ? (progress.current / progress.total) * 100 : 0;
-  const barBg = progress.phase === "done" ? "bg-green-500" : a.bar;
+  const runFailed = progress.phase === "done" && Boolean(
+    progress.runStatus && progress.runStatus !== "completed"
+  );
+  const hasWarning = progress.phase === "done" && !runFailed && Boolean(progress.message);
+  const provisionalLatest = progress.provisionalPrices?.latest;
+  const hasProvisionalUpdate = Boolean(
+    progress.phase === "done" && provisionalLatest && provisionalLatest !== progress.broadPriceDate
+  );
+  const barBg = progress.phase === "done"
+    ? runFailed ? "bg-red-500" : hasWarning ? "bg-amber-500" : "bg-green-500"
+    : a.bar;
   const skipped = progress.log.filter(e => e.status === "skip").length;
 
   return (
@@ -138,15 +157,26 @@ export function UpdateProgressPanel({ progress, label, unitLabel, accentColor }:
       {/* Done summary */}
       {progress.phase === "done" && progress.total > 0 && (
         <div className={`border rounded-lg p-3 text-sm ${
-          progress.updated > 0
-            ? "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-700 dark:text-green-400"
-            : "bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-700 dark:text-yellow-400"
+          runFailed
+            ? "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400"
+            : hasWarning
+              ? "bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-700 dark:text-yellow-400"
+              : progress.updated > 0
+                ? "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-700 dark:text-green-400"
+                : "bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-700 dark:text-yellow-400"
         }`}>
           <p className="font-medium">
-            {progress.updated > 0
+            {runFailed
+              ? "Đồng bộ chưa hoàn tất."
+              : hasWarning
+                ? "Hoàn tất có cảnh báo."
+                : progress.updated > 0
               ? `Xong! ${progress.updated} mã đã cập nhật, ${progress.inserted.toLocaleString()} dòng thêm mới.`
               : `Xong! Tất cả ${progress.total} mã đều đã cập nhật.`}
           </p>
+          {(runFailed || hasWarning) && progress.message && (
+            <p className="mt-1">{progress.message}</p>
+          )}
           {progress.failed > 0 && (
             <p className="text-red-600 dark:text-red-400 mt-1">
               {progress.failed} lỗi — xem log để biết chi tiết.
@@ -165,11 +195,29 @@ export function UpdateProgressPanel({ progress, label, unitLabel, accentColor }:
           {progress.remainingMissing === 0 && (
             <p className="mt-1">Tất cả dữ liệu đã được cập nhật!</p>
           )}
+          {hasProvisionalUpdate && provisionalLatest && (
+            <p className="mt-1">
+              Giá ngày {provisionalLatest} đã tải về nhưng đang ở trạng thái tạm thời; hệ thống sẽ chuyển sang dữ liệu chính thức sau 18:30 (giờ Việt Nam).
+            </p>
+          )}
         </div>
       )}
       {progress.phase === "done" && progress.total === 0 && (
-        <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-3 text-sm text-green-700 dark:text-green-400">
-          Không có mã nào cần cập nhật — dữ liệu {label} đã đầy đủ.
+        <div className={`border rounded-lg p-3 text-sm ${
+          runFailed
+            ? "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400"
+            : hasWarning
+              ? "bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-700 dark:text-yellow-400"
+              : "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-700 dark:text-green-400"
+        }`}>
+          {runFailed || hasWarning ? (
+            <>
+              <p className="font-medium">{runFailed ? "Đồng bộ chưa hoàn tất." : "Hoàn tất có cảnh báo."}</p>
+              {progress.message && <p className="mt-1">{progress.message}</p>}
+            </>
+          ) : (
+            <>Không có mã nào cần cập nhật — dữ liệu {label} đã đầy đủ.</>
+          )}
         </div>
       )}
     </div>

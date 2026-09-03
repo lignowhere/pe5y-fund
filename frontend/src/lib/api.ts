@@ -420,6 +420,15 @@ export interface StreamProgress {
   inserted?: number;
   symbols?: string[];
   remaining_missing?: number;
+  run_status?: string;
+  message?: string | null;
+  broad_price_date?: string | null;
+  latest_market_date?: string | null;
+  provisional_prices?: {
+    rows: number;
+    symbols: number;
+    latest: string | null;
+  };
 }
 
 /** Shared SSE stream reader with auto-reconnect on network errors. */
