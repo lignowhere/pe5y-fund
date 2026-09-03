@@ -1,6 +1,7 @@
 """Direct KBS (KB Securities Vietnam) API client."""
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 from decimal import Decimal
@@ -14,7 +15,7 @@ _HEADERS = {
 }
 
 _PROFILE_URL = "https://kbbuddywts.kbsec.com.vn/iis-server/investment/stockinfo/profile"
-_FINANCE_URL = "https://kbbuddywts.kbsec.com.vn/sas/kbsv-stock-data-store/stock/finance-info"
+_FINANCE_URL = "https://kbbuddywts.kbsec.com.vn/iis-server/investment/stock/finance-info"
 _OHLC_URL = "https://kbbuddywts.kbsec.com.vn/sas/kbsv-stock-data-store/stock/ohlc-chart"
 
 # Map Vietnamese metric names → our field names
@@ -25,6 +26,14 @@ _RATIO_NAME_MAP = {
     "Giá trị sổ sách của cổ phiếu (BVPS)": "bvps",
     "Tỷ suất lợi nhuận trên vốn chủ sở hữu bình quân (ROEA)": "roe",
     "Tỷ suất sinh lợi trên tổng tài sản bình quân (ROAA)": "roa",
+}
+
+_RATIO_EN_MAP = {
+    "Trailing EPS": "eps",
+    "Book value per share (BVPS)": "bvps",
+    "Price to Earnings Ratio (P/E)": "pe",
+    "Price to Book Ratio (P/B)": "pb",
+    "Return on Equity (ROE)": "roe",
 }
 
 # Income statement items we care about (prefix-match)
@@ -49,6 +58,14 @@ class KBSFinancialRow:
     bvps: Optional[Decimal] = None
 
 
+class KBSPriceSourceUnavailable(RuntimeError):
+    """Raised when KBS no longer exposes the expected public OHLC contract."""
+
+    def __init__(self, message: str, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class KBSClient:
     """Direct KBS API client with rate limiting."""
 
@@ -56,12 +73,22 @@ class KBSClient:
         self._client = httpx.Client(headers=_HEADERS, timeout=30.0)
         self._min_interval = 60.0 / max(rate_limit_rpm, 1)
         self._last_request = 0.0
+        self._lock = threading.Lock()
+        self._price_available: bool | None = None
 
     def _throttle(self) -> None:
-        elapsed = time.time() - self._last_request
-        if elapsed < self._min_interval:
-            time.sleep(self._min_interval - elapsed)
-        self._last_request = time.time()
+        """Thread-safe rate limiter — sleeps outside the lock."""
+        with self._lock:
+            now = time.time()
+            elapsed = now - self._last_request
+            if elapsed < self._min_interval:
+                wait_time = self._min_interval - elapsed
+                self._last_request = now + wait_time
+            else:
+                wait_time = 0.0
+                self._last_request = now
+        if wait_time > 0:
+            time.sleep(wait_time)
 
     def _get(self, url: str, params: dict) -> dict:
         self._throttle()
@@ -89,7 +116,10 @@ class KBSClient:
         for items in ratios.get("Content", {}).values():
             for item in items:
                 name = item.get("Name", "")
-                field = _RATIO_NAME_MAP.get(name)
+                field = (
+                    _RATIO_NAME_MAP.get(name)
+                    or _RATIO_EN_MAP.get(item.get("NameEn", ""))
+                )
                 if field:
                     vals[field] = _dec(item.get("Value1"))
 
@@ -112,9 +142,24 @@ class KBSClient:
         self, symbol: str, count_back: int = 30
     ) -> list[dict[str, Any]]:
         """Fetch recent OHLCV bars from KBS as VCI-compatible dicts."""
+        if self._price_available is False:
+            raise KBSPriceSourceUnavailable(
+                "KBS public OHLC endpoint is unavailable; fallback disabled"
+            )
         sym = symbol.upper()
         params = {"symbol": sym, "timeFrame": "D", "count": count_back}
-        data = self._get(_OHLC_URL, params)
+        try:
+            data = self._get(_OHLC_URL, params)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in {404, 410}:
+                self._price_available = False
+                raise KBSPriceSourceUnavailable(
+                    "KBS public OHLC endpoint returned "
+                    f"HTTP {exc.response.status_code}; fallback disabled",
+                    status_code=exc.response.status_code,
+                ) from exc
+            raise
+        self._price_available = True
         items = data.get("data", [])
         if not items or not isinstance(items, list):
             return []

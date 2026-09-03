@@ -2,11 +2,14 @@
 *.db
 *.db-wal
 *.db-shm
+backups/
+provenance_documents/
 
 # Environment
 .env
 .env.local
 .env.production
+.venv/
 
 # OS
 .DS_Store
@@ -20,20 +23,21 @@ __pycache__/
 
 # Node
 node_modules/
-package-lock.json
 
 # Logs
 *.log
+logs/
+output/
+.pe5y-data-sync.lock
+*.pid
 
 # Strategy config overrides
 strategy_config.json
+saved_portfolio.json
+trusted_local_attestation.json
 
 # AI tools config (local only)
 .claude/
 .opencode/
 .playwright-mcp/
 CLAUDE.md
-
-# Startup scripts (local only)
-start.bat
-start.ps1

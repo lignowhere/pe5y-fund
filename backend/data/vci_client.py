@@ -2,12 +2,17 @@
 from __future__ import annotations
 
 import json
+import logging
+import random
+import threading
 import time
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Optional
 
 import httpx
+
+log = logging.getLogger(__name__)
 
 _HEADERS = {
     "Accept": "application/json",
@@ -19,6 +24,7 @@ _HEADERS = {
 
 _GRAPHQL_URL = "https://trading.vietcap.com.vn/data-mt/graphql"
 _OHLC_URL = "https://trading.vietcap.com.vn/api/chart/OHLCChart/gap-chart"
+_IQ_BASE_URL = "https://iq.vietcap.com.vn/api/iq-insight-service/v1/company"
 
 # Exact payload format from VCI API (fragment-based with all field codes).
 # This is the proven format used by vnstock — simplified queries return 400.
@@ -73,6 +79,9 @@ class VCIFinancialRow:
     symbol: str
     year: int
     quarter: Optional[int]
+    public_date: Optional[str] = None
+    source_created_at: Optional[str] = None
+    source_updated_at: Optional[str] = None
     eps: Optional[Decimal] = None
     pe: Optional[Decimal] = None
     pb: Optional[Decimal] = None
@@ -91,59 +100,179 @@ class VCIClient:
         self._client = httpx.Client(headers=_HEADERS, timeout=30.0)
         self._min_interval = 60.0 / max(rate_limit_rpm, 1)
         self._last_request = 0.0
+        self._lock = threading.Lock()
 
     def _throttle(self) -> None:
-        elapsed = time.time() - self._last_request
-        if elapsed < self._min_interval:
-            time.sleep(self._min_interval - elapsed)
-        self._last_request = time.time()
+        """Thread-safe rate limiter that staggers concurrent callers."""
+        with self._lock:
+            now = time.time()
+            next_allowed = self._last_request + self._min_interval
+            if now < next_allowed:
+                wait_time = next_allowed - now
+            else:
+                wait_time = 0.0
+            # Advance slot so the next thread gets the subsequent slot
+            self._last_request = max(now, next_allowed)
+        if wait_time > 0:
+            time.sleep(wait_time)
 
-    def _post_json(self, url: str, payload: dict) -> dict:
-        self._throttle()
-        resp = self._client.post(url, json=payload)
-        resp.raise_for_status()
-        return resp.json()
+    def _post_json(self, url: str, payload: dict, *, _retries: int = 3) -> dict:
+        last_error: Exception | None = None
+        for attempt in range(_retries):
+            self._throttle()
+            try:
+                resp = self._client.post(url, json=payload)
+            except httpx.TransportError as exc:
+                last_error = exc
+                if attempt + 1 == _retries:
+                    raise
+                time.sleep(2 ** attempt + random.uniform(0, 1))
+                continue
+            if resp.status_code == 429 or resp.status_code >= 500:
+                retry_after = float(resp.headers.get("Retry-After", 5))
+                backoff = retry_after * (2 ** attempt) + random.uniform(0, 1)
+                log.warning(
+                    "VCI HTTP %d on attempt %d, backing off %.1fs",
+                    resp.status_code, attempt + 1, backoff,
+                )
+                if attempt + 1 == _retries:
+                    resp.raise_for_status()
+                time.sleep(backoff)
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        if last_error:
+            raise last_error
+        raise RuntimeError("VCI request failed without a response")
+
+    def _get_json(
+        self, url: str, params: dict | None = None, *, retries: int = 3
+    ) -> dict:
+        """GET JSON with the same throttling/backoff used by price requests."""
+        last_error: Exception | None = None
+        for attempt in range(retries):
+            self._throttle()
+            try:
+                resp = self._client.get(url, params=params)
+            except httpx.TransportError as exc:
+                last_error = exc
+                if attempt + 1 == retries:
+                    raise
+                time.sleep(2 ** attempt + random.uniform(0, 1))
+                continue
+            if resp.status_code == 429 or resp.status_code >= 500:
+                wait = float(resp.headers.get("Retry-After", 5)) * (2 ** attempt)
+                if attempt + 1 == retries:
+                    resp.raise_for_status()
+                time.sleep(wait + random.uniform(0, 1))
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        if last_error:
+            raise last_error
+        raise RuntimeError("VCI request failed without a response")
 
     def get_financial_ratios(
         self, symbol: str, period: str = "Y"
     ) -> list[VCIFinancialRow]:
-        """Fetch financial ratios. period='Y' annual, 'Q' quarterly."""
-        payload = json.loads(json.dumps(_RATIO_PAYLOAD_TEMPLATE))
-        payload["variables"]["ticker"] = symbol.upper()
-        payload["variables"]["period"] = period
-        data = self._post_json(_GRAPHQL_URL, payload)
-        if "errors" in data:
-            raise RuntimeError(f"VCI GraphQL error: {data['errors']}")
-        rows_raw = (
-            data.get("data", {})
-            .get("CompanyFinancialRatio", {})
-            .get("ratio") or []
+        """Fetch annual or quarterly rows from Vietcap's maintained IQ REST API."""
+        statement, statistics = self._get_financial_payload(symbol)
+        return self._parse_financial_rows(
+            symbol, statement, statistics, period=period
         )
-        result: list[VCIFinancialRow] = []
-        for r in rows_raw:
-            year = r.get("yearReport")
-            if year is None:
+
+    def get_all_financial_ratios(self, symbol: str) -> list[VCIFinancialRow]:
+        """Fetch annual and quarterly ratios with one pair of IQ requests."""
+        statement, statistics = self._get_financial_payload(symbol)
+        return (
+            self._parse_financial_rows(
+                symbol, statement, statistics, period="Y"
+            )
+            + self._parse_financial_rows(
+                symbol, statement, statistics, period="Q"
+            )
+        )
+
+    def _get_financial_payload(
+        self, symbol: str
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        sym = symbol.upper()
+        base = f"{_IQ_BASE_URL}/{sym}"
+        try:
+            statement = self._get_json(
+                f"{base}/financial-statement",
+                {"section": "INCOME_STATEMENT"},
+            ).get("data") or {}
+            statistics = (
+                self._get_json(f"{base}/statistics-financial").get("data") or []
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return {}, []
+            raise
+        return statement, statistics
+
+    @staticmethod
+    def _parse_financial_rows(
+        symbol: str,
+        statement: dict[str, Any],
+        statistics: list[dict[str, Any]],
+        *,
+        period: str,
+    ) -> list[VCIFinancialRow]:
+        sym = symbol.upper()
+        period_key = "years" if period == "Y" else "quarters"
+        stats_map: dict[tuple[int, int], dict] = {}
+        for item in statistics:
+            try:
+                stats_map[(int(item["year"]), int(item["quarter"]))] = item
+            except (KeyError, TypeError, ValueError):
                 continue
-            length = r.get("lengthReport")
-            quarter = int(length) if length and period == "Q" else None
+
+        result: list[VCIFinancialRow] = []
+        for row in statement.get(period_key) or []:
+            try:
+                year = int(row["yearReport"])
+                report_length = int(row.get("lengthReport") or 5)
+            except (KeyError, TypeError, ValueError):
+                continue
+            quarter = report_length if period == "Q" and report_length < 5 else None
+            stats = stats_map.get((year, report_length), {})
+            shares = _number(stats.get("numberOfSharesMktCap"))
+            eps = _number(row.get("isa23"))
+            if (eps is None or eps == 0) and shares:
+                owner_profit = _number(row.get("isa22"))
+                eps = owner_profit / shares if owner_profit is not None else None
+            market_cap = _number(stats.get("marketCap"))
+
             result.append(VCIFinancialRow(
-                symbol=symbol.upper(),
-                year=int(year),
+                symbol=sym,
+                year=year,
                 quarter=quarter,
-                eps=_dec(r.get("eps")),
-                pe=_dec(r.get("pe")),
-                pb=_dec(r.get("pb")),
-                roe=_dec(r.get("roe")),
-                revenue=_dec(r.get("revenue")),
-                net_profit=_dec(r.get("netProfit")),
-                bvps=_dec(r.get("bvps")),
-                issue_share=_dec(r.get("issueShare")),
-                ev=_dec(r.get("ev")),
+                public_date=_iso_date(row.get("publicDate")),
+                source_created_at=_iso_timestamp(row.get("createDate")),
+                source_updated_at=_iso_timestamp(row.get("updateDate")),
+                eps=_dec(eps),
+                pe=_dec(stats.get("pe")),
+                pb=_dec(stats.get("pb")),
+                roe=_dec(stats.get("roe")),
+                revenue=_dec(row.get("isa3") or row.get("isa1")),
+                net_profit=_dec(row.get("isa22") or row.get("isa20")),
+                bvps=None,
+                # The strategy database stores both values in raw units even
+                # though the legacy column names contain "_millions" and
+                # "_billions". Keep VND/shares here to match historical rows
+                # and the market-cap filter's VND thresholds.
+                issue_share=_dec(shares),
+                ev=_dec(market_cap),
             ))
         return result
 
     def get_annual_ratios(self, symbol: str) -> list[VCIFinancialRow]:
         return self.get_financial_ratios(symbol, "Y")
+
+    def get_quarterly_ratios(self, symbol: str) -> list[VCIFinancialRow]:
+        return self.get_financial_ratios(symbol, "Q")
 
     def get_ohlcv(
         self, symbol: str, count_back: int = 60
@@ -203,3 +332,32 @@ def _dec(val: Any) -> Optional[Decimal]:
         return Decimal(str(val))
     except Exception:
         return None
+
+
+def _number(val: Any) -> float | None:
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iso_timestamp(value: Any) -> str | None:
+    """Normalize a Vietcap source timestamp without inventing missing dates."""
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        # Vietcap uses ISO-8601 without a timezone. SQLite compares this
+        # normalized representation deterministically.
+        return text.replace(" ", "T")
+    except (TypeError, ValueError):
+        return None
+
+
+def _iso_date(value: Any) -> str | None:
+    timestamp = _iso_timestamp(value)
+    return timestamp[:10] if timestamp and len(timestamp) >= 10 else None

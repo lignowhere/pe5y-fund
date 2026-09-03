@@ -52,7 +52,12 @@ def update_financials_stream(
         skip_reason = None
         has_target_year = False
         try:
-            rows = vci.get_annual_ratios(sym)
+            get_all = getattr(vci, "get_all_financial_ratios", None)
+            rows = (
+                get_all(sym)
+                if callable(get_all)
+                else vci.get_annual_ratios(sym) + vci.get_quarterly_ratios(sym)
+            )
             if not rows and kbs is not None:
                 try:
                     kbs_row = kbs.get_financial_summary(sym)
@@ -107,7 +112,7 @@ def update_financials_stream(
                          if v is not None}
                     )
                     cur = conn.execute(
-                        """INSERT OR IGNORE INTO financial_ratios
+                        """INSERT OR REPLACE INTO financial_ratios
                         (symbol, period, year, quarter,
                          price_to_book, price_to_earnings, eps_vnd,
                          bvps_vnd, roe, market_cap_billions,

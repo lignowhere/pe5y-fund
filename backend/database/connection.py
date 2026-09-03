@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional
@@ -10,10 +11,16 @@ from urllib.parse import quote
 
 log = logging.getLogger(__name__)
 
+# Serialized write lock — ensures only one thread writes at a time.
+# WAL mode allows concurrent reads, but writes still need serialization
+# to avoid "database is locked" under ThreadPoolExecutor load.
+_write_lock = threading.Lock()
 
-def _configure(conn: sqlite3.Connection) -> None:
+
+def _configure(conn: sqlite3.Connection, *, readonly: bool = False) -> None:
     """Apply common PRAGMAs to a fresh connection."""
-    conn.execute("PRAGMA journal_mode=WAL")
+    if not readonly:
+        conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
 
 
@@ -32,7 +39,7 @@ def connect(db_path: Path, *, readonly: bool = True) -> Iterator[sqlite3.Connect
         else:
             conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
-        _configure(conn)
+        _configure(conn, readonly=readonly)
         yield conn
     finally:
         if conn is not None:
@@ -41,21 +48,26 @@ def connect(db_path: Path, *, readonly: bool = True) -> Iterator[sqlite3.Connect
 
 @contextmanager
 def connect_rw(db_path: Path) -> Iterator[sqlite3.Connection]:
-    """Open SQLite in read-write mode with auto-commit."""
+    """Open SQLite in read-write mode with auto-commit.
+
+    Uses a process-wide write lock to serialize concurrent writers
+    (e.g. ThreadPoolExecutor workers inserting price data).
+    """
     conn: Optional[sqlite3.Connection] = None
-    try:
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        _configure(conn)
-        yield conn
-        conn.commit()
-    except Exception:
-        if conn is not None:
-            conn.rollback()
-        raise
-    finally:
-        if conn is not None:
-            conn.close()
+    with _write_lock:
+        try:
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            _configure(conn)
+            yield conn
+            conn.commit()
+        except Exception:
+            if conn is not None:
+                conn.rollback()
+            raise
+        finally:
+            if conn is not None:
+                conn.close()
 
 
 def fetch_all(

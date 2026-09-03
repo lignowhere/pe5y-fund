@@ -1,166 +1,121 @@
-# PE_TTM_20Q Fund System
+# PE5Y Fund Planner
 
-Quantitative investment tool for Vietnam stock market using the PE_TTM_20Q_RELAXED strategy.
+Ứng dụng Windows chạy cục bộ để quy đổi NAV hiện tại thành số cổ phiếu mục
+tiêu của chu kỳ chiến lược đang hoạt động. Planner chỉ đọc snapshot bất biến;
+không tính lại tín hiệu lịch sử từ các bảng dữ liệu đang thay đổi.
 
-## What is PE_TTM_20Q?
+## Bắt đầu nhanh
 
-Select stocks with the lowest P/E ratio based on 20-quarter trailing average EPS. The RELAXED variant only requires avg EPS > 0 (not all 20 quarters positive), yielding a larger universe (21-26 stocks vs 11-12 for strict). Applies market cap, liquidity, and data quality filters, then sizes positions with ADV (Average Daily Volume) constraints. Rebalances annually on September 1.
+Yêu cầu Python 3.12 và Node.js 22.13 LTS.
 
-**Backtested CAGR**: 31.74% (PE_TTM_20Q_RELAXED, Sep-1, 14% select, 2015-2025) vs VNINDEX 8.66%
+```powershell
+# Chỉ cần chạy lần đầu hoặc sau khi đổi dependency
+powershell -ExecutionPolicy Bypass -File scripts\setup-runtime.ps1
 
-> PE5Y (5-year annual EPS) is retained in `backend/strategy/signal.py` for reference and comparison backtests.
-
-## Architecture
-
-```
-┌──────────────┬──────────────────┬───────────────────────┐
-│   Frontend   │  Fund Backend    │  Inventory Backend    │
-│  (Next.js)   │   (FastAPI)      │  (Express/Prisma)     │
-│  :3000       │   :8002          │  :3001                │
-└──────────────┴──────────────────┴───────────────────────┘
-       │               │                    │
-       │          ┌────┴────┐          ┌────┴────┐
-       │          │ SQLite  │          │PostgreSQL│
-       │          └─────────┘          └─────────┘
-       │               │
-       │         ┌─────┴──────┐
-       │         │ VCI + KBS  │  (Vietnamese broker APIs)
-       │         └────────────┘
+# Khởi động backend + frontend production
+start.bat
 ```
 
-## Sub-Projects
+Mở <http://localhost:3000>. Backend ở
+<http://127.0.0.1:8002/docs>. Database mặc định là
+`vietnam_stocks.db` tại thư mục gốc và không được commit vào Git.
 
-| Project | Stack | Purpose |
-|---------|-------|---------|
-| **Fund Backend** | Python, FastAPI, SQLite | Strategy engine, data pipeline, backtesting |
-| **Frontend** | Next.js 16, React 19, Tailwind | Dashboard, portfolio viewer, config, data management |
-| **Inventory Backend** | Express 5, Prisma, PostgreSQL | Multi-channel inventory management |
-| **SEO Automation** | Cloudflare Workers, Hono, D1 | Automated SEO scanning + AI rewrite |
+Đăng ký cập nhật dữ liệu ngầm:
 
-## Quick Start
-
-### Fund Backend (Python)
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Set database path (local SQLite — gitignored)
-echo "PE5Y_DB_PATH=./vietnam_stocks.db" > .env
-
-# Run server
-uvicorn backend.main:app --host 127.0.0.1 --port 8002 --reload
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\register-background-sync.ps1
 ```
 
-### Frontend (Next.js)
+Task chạy khi đăng nhập Windows và lúc 18:30 từ thứ Hai đến thứ Sáu, có chạy
+bù, retry và khóa chống chạy trùng.
 
-```bash
-cd frontend
-npm install
-npm run dev   # http://localhost:3000
+## Luồng sử dụng
+
+1. Chọn `LAST_8Q_PLUS` hoặc `TTM_20Q` và tỷ lệ 10/12/14/16%.
+2. Nhập NAV hiện tại.
+3. Tùy chọn nhập và lưu danh mục đang nắm giữ.
+4. Bấm **Tính danh mục**, xem số lượng mục tiêu và chênh lệch MUA/BÁN/GIỮ.
+5. Xuất CSV khi cần.
+
+`POST /api/fund/portfolio-plan` là API lập danh mục duy nhất. Các endpoint
+động cũ dưới `/api/strategy/portfolio`, `/api/strategy/optimize` và
+`/api/strategy/history/*` trả HTTP 410.
+
+## Trạng thái tin cậy dữ liệu
+
+Hệ thống phân biệt ba cấp, không trộn nhãn:
+
+- `strict_pit`: chỉ dùng revision và ngày công bố có bằng chứng chính thức.
+- `trusted_local`: dùng database cục bộ mà chủ quỹ đã xác nhận chấp nhận.
+  Snapshot, danh sách, rank và giá mua vẫn được khóa bất biến; chế độ này
+  không tự nhận là đã đối chiếu tài liệu sở giao dịch.
+- `legacy_research`: dùng snapshot bất biến dựng từ dữ liệu vendor đang có,
+  chỉ phục vụ nghiên cứu.
+
+Khi chủ quỹ quyết định dùng database hiện có, chạy một lần:
+
+```powershell
+.venv\Scripts\python.exe -m backend.backtest.activate_trusted_local
 ```
 
-### Inventory Backend (Node.js)
+Lệnh tạo backup có checksum trước migration, ghi xác nhận, chạy lại backtest
+10 năm và chỉ kích hoạt snapshot mới sau khi toàn bộ phép kiểm tra thành công.
 
-```bash
-cd backend
-npm install
-npx prisma generate
-npx prisma migrate dev
-npm run dev   # http://localhost:3001
+Máy hiện có thể bật chế độ nghiên cứu bằng:
+
+```dotenv
+PE5Y_ALLOW_LEGACY_RESEARCH_PLANNER=1
 ```
 
-## API Endpoints
+Chế độ này không biến dữ liệu thành `investment_ready`. API, giao diện và CSV
+vẫn gắn nhãn/cảnh báo `legacy_research`. Đặt lại thành `0` để fail closed hoàn
+toàn: thiếu provenance thì planner trả HTTP 503 `SNAPSHOT_NOT_VERIFIED`.
 
-### Strategy
+## Quy tắc chiến lược cốt lõi
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/strategy/optimize?capital=10000000000` | Compare 10/12/14/16% configs, recommend best + VNINDEX benchmark |
-| GET | `/api/strategy/portfolio?capital=10B&pct=14` | Full portfolio with position sizing |
-| GET | `/api/strategy/history/sensitivity` | 72-run sensitivity heatmap data |
-| GET | `/api/strategy/config` | Get current strategy config |
-| PUT | `/api/strategy/config` | Save strategy config overrides |
-| POST | `/api/strategy/config/reset` | Reset config to defaults |
+- Chu kỳ tháng 9 dùng giá đóng cửa phiên hoàn tất cuối trước 01/09 để tạo tín
+  hiệu và giá mở cửa phiên đầu từ 01/09 để mô phỏng thực thi.
+- Cả hai chiến lược định giá bằng tối đa 20 quý đã khả dụng tại cutoff.
+  `LAST_8Q_PLUS` yêu cầu thêm EPS của 8 quý gần nhất đều dương.
+- Mỗi chu kỳ cần tối thiểu 15 mã.
+- NAV hiện tại chỉ co giãn danh mục đã mua tại ngày chiến lược; tỷ trọng được
+  để trôi theo hiệu suất từng mã, không tái cân bằng đều tại hôm nay.
+- ADV dùng 20 phiên hoàn tất trước ngày thực thi; số lượng làm tròn theo lô.
+- Split/cổ tức cổ phiếu đổi số lượng; cổ tức tiền mặt đi vào cash. Sự kiện
+  quyền chưa hỗ trợ hoặc dữ liệu xung đột làm phép tính dừng.
 
-### Data Management
+Chi tiết và công thức nằm tại
+[Chiến lược và dữ liệu](docs/strategy-and-data.md).
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/data/status` | Data freshness summary |
-| GET | `/api/data/health` | Comprehensive DB coverage report |
-| GET | `/api/data/missing/prices` | Symbols with stale price data |
-| POST | `/api/data/update/prices` | Trigger price update |
-| GET | `/api/data/update/prices/stream` | SSE streaming price update |
-| GET | `/api/data/update/financials/stream` | SSE streaming financials update |
-| GET | `/api/data/search?q=VNM` | Search symbols by ticker/name |
+## Cấu trúc mã nguồn
 
-### Verification
+```text
+backend/
+  api/       HTTP routes
+  fund/      snapshot, planner, holdings, corporate actions
+  data/      sync, provenance, migration, nguồn dữ liệu
+  strategy/  tín hiệu và các hàm ADV/sizing dùng chung
+  backtest/  dựng snapshot và nghiên cứu 10 năm còn được hỗ trợ
+frontend/    giao diện Next.js
+scripts/     cài đặt, scheduler, import và rebuild
+tests/       pytest cho dữ liệu, snapshot và planner
+docs/        tài liệu kỹ thuật
+```
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/verify/{symbol}` | Cross-check VCI vs KBS data |
-| GET | `/api/verify/batch/check?symbols=VNM,FPT` | Batch verification (max 50) |
+Mục lục dành cho người tiếp quản:
+[docs/README.md](docs/README.md).
 
-## Strategy Pipeline
+## Kiểm tra trước khi bàn giao
 
-1. **Signal generation** — Query 20 quarters of quarterly EPS, apply market cap floor (200B VND base, +10%/2yr from 2015), apply liquidity filters (trading days, ADV, zero volume, stale close)
-2. **Ranking** — Compute `pe_ratio = price_vnd / avg_quarterly_eps[20q]`, rank ascending
-3. **Selection** — Top N% of universe (configurable: 10/12/14/16%)
-4. **Position sizing** — Equal-weight with ADV constraints (10% participation, 100-share lots)
-5. **Optimization** — Recommend config with highest historical CAGR where fill_rate >= 85%
+```powershell
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.venv\Scripts\python.exe -m pytest tests -q
+npm run lint
+npm run build
+npm run audit
+.venv\Scripts\python.exe -m pip_audit -r requirements.txt
+```
 
-## Backtest Summary
-
-| Strategy | CAGR | Universe size | Notes |
-|----------|------|---------------|-------|
-| PE_TTM_20Q_RELAXED | **31.74%** | 21-26 stocks | **Production** |
-| PE5Y | 29.82% | 11-12 stocks | Reference only |
-| VNINDEX | 8.66% | — | Benchmark |
-| KTPL-adjusted | ~31.2% | 21-26 stocks | Tested, rejected (noisy, -0.5pp) |
-
-## Data Sources
-
-- **VCI (Vietcap)** — Financial ratios via GraphQL, OHLCV via REST (30 RPM)
-- **KBS (KB Securities)** — Financial summary, stock profiles (30 RPM)
-- **Cross-validation** — VCI vs KBS comparison with configurable tolerance thresholds
-
-## Database
-
-### SQLite (Fund) — `./vietnam_stocks.db`
-- Stored locally, gitignored (not committed to repository)
-- Configure path via `PE5Y_DB_PATH` env var (defaults to `./vietnam_stocks.db`)
-- `stocks` — ticker, company name
-- `stock_exchange` — ticker to exchange mapping (HSX/HNX/UPCOM)
-- `stock_price_history` — daily OHLCV (close stored in thousands of VND)
-- `financial_ratios` — annual/quarterly EPS, P/E, P/B, ROE, market cap (annual: `quarter=NULL`; quarterly: `quarter=1-4`)
-
-### PostgreSQL (Inventory)
-- User, Warehouse, Product, Inventory, InventoryMovement, StockTransfer, BatchLot
-
-## Frontend Pages
-
-- **Dashboard** (`/`) — Input capital, compare strategy configs, get recommendation with VNINDEX benchmark
-- **Portfolio** (`/portfolio`) — Position table with fill rates, ADV data, and Rebalance Calculator (deposit/withdraw)
-- **Config** (`/config`) — Live strategy parameter editor (filters, sizing, costs)
-- **Verify** (`/verify`) — VCI vs KBS data cross-check for any symbol
-- **Data** (`/data`) — DB health report, missing data detection, streaming updates
-
-## Documentation
-
-Detailed docs in [`./docs/`](./docs/):
-- [Project Overview & PDR](./docs/project-overview-pdr.md)
-- [Codebase Summary](./docs/codebase-summary.md)
-- [Code Standards](./docs/code-standards.md)
-- [System Architecture](./docs/system-architecture.md)
-- [Project Roadmap](./docs/project-roadmap.md)
-- [Deployment Guide](./docs/deployment-guide.md)
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Fund Backend | Python 3.12+, FastAPI, httpx, APScheduler, SQLite |
-| Inventory Backend | Node.js, Express 5, Prisma, PostgreSQL, Zod |
-| Frontend | Next.js 16, React 19, Tailwind CSS 4, TypeScript |
-| SEO Automation | Cloudflare Workers, Hono, D1, Durable Objects |
+Không sửa trực tiếp snapshot active, revision PIT hoặc file DB. Mọi thay đổi
+dữ liệu phải đi qua migration/importer, dựng snapshot staging, kiểm tra cổng
+an toàn rồi mới kích hoạt nguyên tử.
